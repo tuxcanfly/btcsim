@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -220,8 +221,14 @@ out:
 // Stop kills the Actor's wallet process and shuts down any goroutines running
 // to manage the Actor's behavior.
 func (a *Actor) Stop() (err error) {
-	if killErr := a.cmd.Process.Kill(); killErr != nil {
-		err = killErr
+	if runtime.GOOS == "windows" {
+		if killErr := a.cmd.Process.Signal(os.Kill); killErr != nil {
+			err = killErr
+		}
+	} else {
+		if killErr := a.cmd.Process.Signal(os.Interrupt); killErr != nil {
+			err = killErr
+		}
 	}
 	a.cmd.Wait()
 	close(a.quit)
