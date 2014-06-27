@@ -155,20 +155,30 @@ func main() {
 		return
 	}
 
+	addInterruptHandler(func () {
+		miner.Shutdown()
+	})
+
 	// Add mining btcd listen interface as a node
 	client.AddNode("localhost:18550", rpc.ANAdd)
 
-out:
-	for {
-		select {
-		case addr := <-com.upstream:
-			com.downstream <- addr
-		case <-com.stop:
-			break out
+	go func() {
+	out:
+		for {
+			select {
+			case addr := <-com.upstream:
+				com.downstream <- addr
+			case <-com.stop:
+				break out
+			}
 		}
-	}
+		Kill(actors, btcd, wg, com.stop)
+		miner.Shutdown()
+		shutdownChannel <- true
+	}()
 
 	// TODO: Collect statistics from the blockchain
+	<-shutdownChannel
 }
 
 // Kill shuts down actors and the initial btcd process.
