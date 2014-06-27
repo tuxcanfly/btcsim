@@ -218,21 +218,25 @@ out:
 	return nil
 }
 
+// Exit closes the cmd by passing SIGINT
+// workaround for windows by passing SIGKILL
+func Exit(cmd *exec.Cmd) error {
+	var err error
+	if runtime.GOOS == "windows" {
+		err = cmd.Process.Signal(os.Kill)
+	} else {
+		err = cmd.Process.Signal(os.Interrupt)
+	}
+	cmd.Wait()
+	return err
+}
+
 // Stop kills the Actor's wallet process and shuts down any goroutines running
 // to manage the Actor's behavior.
-func (a *Actor) Stop() (err error) {
-	if runtime.GOOS == "windows" {
-		if killErr := a.cmd.Process.Signal(os.Kill); killErr != nil {
-			err = killErr
-		}
-	} else {
-		if killErr := a.cmd.Process.Signal(os.Interrupt); killErr != nil {
-			err = killErr
-		}
-	}
-	a.cmd.Wait()
+func (a *Actor) Stop() error {
+	err := Exit(a.cmd)
 	close(a.quit)
-	return
+	return err
 }
 
 // Cleanup removes the directory an Actor's wallet process was previously using.
