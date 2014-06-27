@@ -110,6 +110,7 @@ func main() {
 	}
 	if client == nil {
 		log.Printf("Cannot start btcd rpc client: %v", err)
+		Kill(actors, btcd, wg, com.stop)
 		return
 	}
 
@@ -131,6 +132,8 @@ func main() {
 		go func(a *Actor, com Communication) {
 			if err := a.Start(os.Stderr, os.Stdout, com); err != nil {
 				log.Printf("Cannot start actor on %s: %v", "localhost:"+a.args.port, err)
+				// cleanup btcd process
+				btcd.Wait()
 				// TODO: reslice actors when one actor cannot start
 			}
 		}(a, com)
