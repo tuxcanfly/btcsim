@@ -211,6 +211,12 @@ out:
 				a.downstream = nil
 			}
 		case <-a.quit:
+			if err := a.Stop(); err != nil {
+				log.Printf("Cannot stop actor on %s: %v", "localhost:"+a.args.port, err)
+			}
+			if err := a.Cleanup(); err != nil {
+				log.Printf("Cannot cleanup actor on %s directory: %v", "localhost:"+a.args.port, err)
+			}
 			break out
 		}
 	}

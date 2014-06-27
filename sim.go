@@ -110,7 +110,7 @@ func main() {
 	}
 	if client == nil {
 		log.Printf("Cannot start btcd rpc client: %v", err)
-		Kill(actors, btcd, wg, com.stop)
+		Close(actors, btcd, &wg, com.stop)
 		return
 	}
 
@@ -124,7 +124,7 @@ func main() {
 	}
 
 	addInterruptHandler(func () {
-		Kill(actors, btcd, wg, com.stop)
+		Close(actors, btcd, &wg, com.stop)
 	})
 
 	// Start actors.
@@ -145,11 +145,11 @@ func main() {
 	// Start mining.
 	miner, err := NewMiner(addressTable, com.stop)
 	if err != nil && miner == nil { // Miner didn't start at all
-		Kill(actors, btcd, wg, com.stop)
+		Close(actors, btcd, &wg, com.stop)
 		return
 	} else if err != nil && miner != nil { // Miner started so we have to shut it down
 		miner.Shutdown()
-		Kill(actors, btcd, wg, com.stop)
+		Close(actors, btcd, &wg, com.stop)
 		return
 	}
 
@@ -170,40 +170,34 @@ func main() {
 				break out
 			}
 		}
-		Kill(actors, btcd, wg, com.stop)
+		Close(actors, btcd, &wg, com.stop)
 		miner.Shutdown()
 		shutdownChannel <- true
 	}()
+
+	// wait for actors to finish
+	wg.Wait()
 
 	// TODO: Collect statistics from the blockchain
 	<-shutdownChannel
 }
 
-// Kill shuts down actors and the initial btcd process.
-func Kill(actors []*Actor, btcd *exec.Cmd, wg sync.WaitGroup, stop chan struct{}) {
-	// Kill initial btcd instance.
+// Close sends close signal to actors and the exits initial btcd process.
+func Close(actors []*Actor, btcd *exec.Cmd, wg *sync.WaitGroup, stop chan struct{}) {
 	err := Exit(btcd)
 	if err != nil {
 		log.Printf("Cannot kill initial btcd process: %v", err)
 	}
 
+	// send stop signal
+	stop <- struct{}{}
+
 	for _, a := range actors {
 		wg.Add(1)
 		go func(a *Actor) {
-			defer wg.Done()
-			if err := a.Stop(); err != nil {
-				log.Printf("Cannot stop actor on %s: %v", "localhost:"+a.args.port, err)
-				return
-			}
-			if err := a.Cleanup(); err != nil {
-				log.Printf("Cannot cleanup actor on %s directory: %v", "localhost:"+a.args.port, err)
-				return
-			}
+			a.quit <- struct{}{}
 			log.Printf("Actor on %s shutdown successfully", "localhost:"+a.args.port)
+			wg.Done()
 		}(a)
 	}
-	wg.Wait()
-
-	// send stop signal
-	stop <- struct{}{}
 }
