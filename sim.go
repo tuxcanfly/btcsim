@@ -133,7 +133,7 @@ func main() {
 			if err := a.Start(os.Stderr, os.Stdout, com); err != nil {
 				log.Printf("Cannot start actor on %s: %v", "localhost:"+a.args.port, err)
 				// cleanup btcd process
-				btcd.Wait()
+				Exit(btcd)
 				// TODO: reslice actors when one actor cannot start
 			}
 		}(a, com)
@@ -181,14 +181,26 @@ func main() {
 	<-shutdownChannel
 }
 
-// Kill shuts down actors and the initial btcd process.
-func Kill(actors []*Actor, btcd *exec.Cmd, wg sync.WaitGroup, stop chan struct{}) {
+func Exit(btcd *exec.Cmd) {
 	// Kill initial btcd instance.
 	if err := btcd.Process.Kill(); err != nil {
 		log.Printf("Cannot kill initial btcd process: %v", err)
 	}
+	if runtime.GOOS == "windows" {
+		if err := btcd.Process.Signal(os.Kill); err != nil {
+			log.Printf("Cannot kill initial btcd process: %v", err)
+		}
+	} else {
+		if err := btcd.Process.Signal(os.Interrupt); err != nil {
+			log.Printf("Cannot kill initial btcd process: %v", err)
+		}
+	}
 	btcd.Wait()
+}
 
+// Kill shuts down actors and the initial btcd process.
+func Kill(actors []*Actor, btcd *exec.Cmd, wg sync.WaitGroup, stop chan struct{}) {
+	Exit(btcd)
 	for _, a := range actors {
 		wg.Add(1)
 		go func(a *Actor) {
