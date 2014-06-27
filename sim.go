@@ -110,7 +110,7 @@ func main() {
 	}
 	if client == nil {
 		log.Printf("Cannot start btcd rpc client: %v", err)
-		Close(actors, btcd, &wg, com.stop)
+		Close(actors, btcd, &wg)
 		return
 	}
 
@@ -124,7 +124,7 @@ func main() {
 	}
 
 	addInterruptHandler(func () {
-		Close(actors, btcd, &wg, com.stop)
+		Close(actors, btcd, &wg)
 	})
 
 	// Start actors.
@@ -145,11 +145,11 @@ func main() {
 	// Start mining.
 	miner, err := NewMiner(addressTable, com.stop)
 	if err != nil && miner == nil { // Miner didn't start at all
-		Close(actors, btcd, &wg, com.stop)
+		Close(actors, btcd, &wg)
 		return
 	} else if err != nil && miner != nil { // Miner started so we have to shut it down
 		miner.Shutdown()
-		Close(actors, btcd, &wg, com.stop)
+		Close(actors, btcd, &wg)
 		return
 	}
 
@@ -170,7 +170,7 @@ func main() {
 				break out
 			}
 		}
-		Close(actors, btcd, &wg, com.stop)
+		Close(actors, btcd, &wg)
 		miner.Shutdown()
 		shutdownChannel <- true
 	}()
@@ -183,14 +183,11 @@ func main() {
 }
 
 // Close sends close signal to actors and the exits initial btcd process.
-func Close(actors []*Actor, btcd *exec.Cmd, wg *sync.WaitGroup, stop chan struct{}) {
+func Close(actors []*Actor, btcd *exec.Cmd, wg *sync.WaitGroup) {
 	err := Exit(btcd)
 	if err != nil {
 		log.Printf("Cannot kill initial btcd process: %v", err)
 	}
-
-	// send stop signal
-	stop <- struct{}{}
 
 	for _, a := range actors {
 		wg.Add(1)
