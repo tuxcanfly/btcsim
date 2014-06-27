@@ -19,6 +19,10 @@ import (
 	"github.com/conformal/btcutil"
 )
 
+var (
+	shutdownChannel = make(chan bool)
+)
+
 // ChainServer describes the arguments necessary to connect a btcwallet
 // instance to a btcd websocket RPC server.
 type ChainServer struct {
@@ -106,29 +110,9 @@ func main() {
 	}
 	if client == nil {
 		log.Printf("Cannot start btcd rpc client: %v", err)
-		Kill(actors, btcd, wg)
 		return
 	}
 
-	// If we panic somewhere, at least try to stop the spawned wallet
-	// processes.
-	defer func() {
-		if r := recover(); r != nil {
-			log.Println("Panic! Shuting down actors...")
-			for _, a := range actors {
-				func() {
-					// Ignore any other panics that may
-					// occur during panic handling.
-					defer recover()
-					a.Stop()
-					a.Cleanup()
-				}()
-			}
-			panic(r)
-		}
-	}()
-
-	// Create actors.
 	for i := 0; i < actorsAmount; i++ {
 		a, err := NewActor(&defaultChainServer, uint16(18557+i))
 		if err != nil {
@@ -137,6 +121,10 @@ func main() {
 		}
 		actors = append(actors, a)
 	}
+
+	addInterruptHandler(func () {
+		Kill(actors, btcd, wg, com.stop)
+	})
 
 	// Start actors.
 	for _, a := range actors {
@@ -156,11 +144,11 @@ func main() {
 	// Start mining.
 	miner, err := NewMiner(addressTable, com.stop)
 	if err != nil && miner == nil { // Miner didn't start at all
-		Kill(actors, btcd, wg)
+		Kill(actors, btcd, wg, com.stop)
 		return
 	} else if err != nil && miner != nil { // Miner started so we have to shut it down
 		miner.Shutdown()
-		Kill(actors, btcd, wg)
+		Kill(actors, btcd, wg, com.stop)
 		return
 	}
 
@@ -178,16 +166,10 @@ out:
 	}
 
 	// TODO: Collect statistics from the blockchain
-
-	log.Println("Time to die")
-	// Shutdown miner.
-	miner.Shutdown()
-	// Kill actors and initial btcd instance.
-	Kill(actors, btcd, wg)
 }
 
 // Kill shuts down actors and the initial btcd process.
-func Kill(actors []*Actor, btcd *exec.Cmd, wg sync.WaitGroup) {
+func Kill(actors []*Actor, btcd *exec.Cmd, wg sync.WaitGroup, stop chan struct{}) {
 	// Kill initial btcd instance.
 	if err := btcd.Process.Kill(); err != nil {
 		log.Printf("Cannot kill initial btcd process: %v", err)
@@ -211,4 +193,6 @@ func Kill(actors []*Actor, btcd *exec.Cmd, wg sync.WaitGroup) {
 	}
 	wg.Wait()
 
+	// send stop signal
+	stop <- struct{}{}
 }
