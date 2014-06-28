@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"time"
 
 	rpc "github.com/conformal/btcrpcclient"
@@ -57,7 +56,6 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	rand.Seed(int64(time.Now().Nanosecond()))
 
-	var wg sync.WaitGroup
 	// Number of actors
 	var actorsAmount = 1
 	actors := make([]*Actor, 0, actorsAmount)
@@ -110,7 +108,7 @@ func main() {
 	}
 	if client == nil {
 		log.Printf("Cannot start btcd rpc client: %v", err)
-		Close(actors, btcd, &wg)
+		Close(actors, btcd)
 		return
 	}
 
@@ -124,11 +122,12 @@ func main() {
 	}
 
 	addInterruptHandler(func () {
-		Close(actors, btcd, &wg)
+		Close(actors, btcd)
 	})
 
 	// Start actors.
 	for _, a := range actors {
+		a.wg.Add(1)
 		go func(a *Actor, com Communication) {
 			if err := a.Start(os.Stderr, os.Stdout, com); err != nil {
 				log.Printf("Cannot start actor on %s: %v", "localhost:"+a.args.port, err)
@@ -145,11 +144,11 @@ func main() {
 	// Start mining.
 	miner, err := NewMiner(addressTable, com.stop)
 	if err != nil && miner == nil { // Miner didn't start at all
-		Close(actors, btcd, &wg)
+		Close(actors, btcd)
 		return
 	} else if err != nil && miner != nil { // Miner started so we have to shut it down
 		miner.Shutdown()
-		Close(actors, btcd, &wg)
+		Close(actors, btcd)
 		return
 	}
 
@@ -170,31 +169,30 @@ func main() {
 				break out
 			}
 		}
-		Close(actors, btcd, &wg)
+		Close(actors, btcd)
 		miner.Shutdown()
 		shutdownChannel <- true
 	}()
-
-	// wait for actors to finish
-	wg.Wait()
 
 	// TODO: Collect statistics from the blockchain
 	<-shutdownChannel
 }
 
 // Close sends close signal to actors and the exits initial btcd process.
-func Close(actors []*Actor, btcd *exec.Cmd, wg *sync.WaitGroup) {
+func Close(actors []*Actor, btcd *exec.Cmd) {
 	err := Exit(btcd)
 	if err != nil {
 		log.Printf("Cannot kill initial btcd process: %v", err)
 	}
 
 	for _, a := range actors {
-		wg.Add(1)
-		go func(a *Actor) {
-			a.quit <- struct{}{}
-			log.Printf("Actor on %s shutdown successfully", "localhost:"+a.args.port)
-			wg.Done()
-		}(a)
+		if err := a.Stop(); err != nil {
+			log.Printf("Cannot stop actor on %s: %v", "localhost:"+a.args.port, err)
+		}
+		if err := a.Cleanup(); err != nil {
+			log.Printf("Cannot cleanup actor on %s directory: %v", "localhost:"+a.args.port, err)
+		}
+		a.WaitForShutdown()
+		log.Printf("Actor on %s shutdown successfully", "localhost:"+a.args.port)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	rpc "github.com/conformal/btcrpcclient"
@@ -31,6 +32,7 @@ type Actor struct {
 	upstream   chan btcutil.Address
 	stop       chan struct{}
 	quit       chan struct{}
+	wg         sync.WaitGroup
 }
 
 // NewActor creates a new actor which runs its own wallet process connecting
@@ -211,16 +213,11 @@ out:
 				a.downstream = nil
 			}
 		case <-a.quit:
-			if err := a.Stop(); err != nil {
-				log.Printf("Cannot stop actor on %s: %v", "localhost:"+a.args.port, err)
-			}
-			if err := a.Cleanup(); err != nil {
-				log.Printf("Cannot cleanup actor on %s directory: %v", "localhost:"+a.args.port, err)
-			}
 			break out
 		}
 	}
 
+	a.wg.Done()
 	return nil
 }
 
@@ -243,6 +240,10 @@ func (a *Actor) Stop() error {
 	err := Exit(a.cmd)
 	close(a.quit)
 	return err
+}
+
+func (a *Actor) WaitForShutdown() {
+	a.wg.Wait()
 }
 
 // Cleanup removes the directory an Actor's wallet process was previously using.
