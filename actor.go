@@ -217,15 +217,19 @@ out:
 	}
 
 	a.wg.Done()
+	log.Printf("Actor on %s shutdown successfully", "localhost:"+a.args.port)
 	return nil
 }
 
 // Stop kills the Actor's wallet process and shuts down any goroutines running
 // to manage the Actor's behavior.
 func (a *Actor) Stop() error {
-	err := Exit(a.cmd)
-	close(a.quit)
-	return err
+	select {
+	case <-a.quit:
+	default:
+		close(a.quit)
+	}
+	return nil
 }
 
 func (a *Actor) WaitForShutdown() {

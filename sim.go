@@ -108,7 +108,10 @@ func main() {
 	}
 	if client == nil {
 		log.Printf("Cannot start btcd rpc client: %v", err)
-		Close(actors, btcd)
+		err := Exit(btcd)
+		if err != nil {
+			log.Printf("Cannot kill initial btcd process: %v", err)
+		}
 		return
 	}
 
@@ -121,8 +124,9 @@ func main() {
 		actors = append(actors, a)
 	}
 
-	addInterruptHandler(func () {
+	addInterruptHandler(func() {
 		Close(actors, btcd)
+		Wait(actors)
 	})
 
 	// Start actors.
@@ -143,33 +147,36 @@ func main() {
 
 	// Start mining.
 	miner, err := NewMiner(addressTable, com.stop)
-	if err != nil && miner == nil { // Miner didn't start at all
+	if err != nil {
 		Close(actors, btcd)
-		return
-	} else if err != nil && miner != nil { // Miner started so we have to shut it down
-		miner.Shutdown()
-		Close(actors, btcd)
+		Wait(actors)
+		if miner != nil { // Miner started so we have to shut it down
+			miner.Shutdown()
+		}
 		return
 	}
 
-	addInterruptHandler(func () {
+	addInterruptHandler(func() {
 		miner.Shutdown()
 	})
 
 	// Add mining btcd listen interface as a node
 	client.AddNode("localhost:18550", rpc.ANAdd)
 
-	go func() {
-	out:
-		for {
-			select {
-			case addr := <-com.upstream:
-				com.downstream <- addr
-			case <-com.stop:
-				break out
-			}
+out:
+	for {
+		select {
+		case addr := <-com.upstream:
+			com.downstream <- addr
+		case <-com.stop:
+			break out
 		}
-		Close(actors, btcd)
+	}
+
+	Close(actors, btcd)
+
+	go func() {
+		Wait(actors)
 		miner.Shutdown()
 		shutdownChannel <- true
 	}()
@@ -197,15 +204,22 @@ func Close(actors []*Actor, btcd *exec.Cmd) {
 	if err != nil {
 		log.Printf("Cannot kill initial btcd process: %v", err)
 	}
-
 	for _, a := range actors {
 		if err := a.Stop(); err != nil {
 			log.Printf("Cannot stop actor on %s: %v", "localhost:"+a.args.port, err)
 		}
+	}
+}
+
+// Wait waits until all actors are done
+func Wait(actors []*Actor) {
+	for _, a := range actors {
+		a.WaitForShutdown()
 		if err := a.Cleanup(); err != nil {
 			log.Printf("Cannot cleanup actor on %s directory: %v", "localhost:"+a.args.port, err)
 		}
-		a.WaitForShutdown()
-		log.Printf("Actor on %s shutdown successfully", "localhost:"+a.args.port)
+		if err := Exit(a.cmd); err != nil {
+			log.Printf("Cannot exit actor on %s directory: %v", "localhost:"+a.args.port, err)
+		}
 	}
 }
