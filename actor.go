@@ -12,7 +12,6 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -219,19 +218,6 @@ out:
 
 	a.wg.Done()
 	return nil
-}
-
-// Exit closes the cmd by passing SIGINT
-// workaround for windows by passing SIGKILL
-func Exit(cmd *exec.Cmd) error {
-	var err error
-	if runtime.GOOS == "windows" {
-		err = cmd.Process.Signal(os.Kill)
-	} else {
-		err = cmd.Process.Signal(os.Interrupt)
-	}
-	cmd.Wait()
-	return err
 }
 
 // Stop kills the Actor's wallet process and shuts down any goroutines running

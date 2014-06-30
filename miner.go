@@ -128,7 +128,7 @@ func NewMiner(addressTable []btcutil.Address, stop chan struct{}) (*Miner, error
 // Shutdown kills the mining btcd process and removes its data and
 // log directories.
 func (m *Miner) Shutdown() {
-	if err := m.cmd.Process.Kill(); err != nil {
+	if err := Exit(m.cmd); err != nil {
 		log.Printf("Cannot kill mining btcd process: %v", err)
 		return
 	}

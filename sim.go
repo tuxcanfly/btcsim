@@ -178,6 +178,19 @@ func main() {
 	<-shutdownChannel
 }
 
+// Exit closes the cmd by passing SIGINT
+// workaround for windows by passing SIGKILL
+func Exit(cmd *exec.Cmd) error {
+	var err error
+	if runtime.GOOS == "windows" {
+		err = cmd.Process.Signal(os.Kill)
+	} else {
+		err = cmd.Process.Signal(os.Interrupt)
+	}
+	cmd.Wait()
+	return err
+}
+
 // Close sends close signal to actors and the exits initial btcd process.
 func Close(actors []*Actor, btcd *exec.Cmd) {
 	err := Exit(btcd)
