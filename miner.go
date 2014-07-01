@@ -132,7 +132,6 @@ func (m *Miner) Shutdown() {
 		log.Printf("Cannot kill mining btcd process: %v", err)
 		return
 	}
-	m.cmd.Wait()
 
 	if err := os.RemoveAll(m.datadir); err != nil {
 		log.Printf("Cannot remove mining btcd datadir: %v", err)

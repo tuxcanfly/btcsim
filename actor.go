@@ -142,7 +142,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 		break
 	}
 	if a.client == nil {
-		if err := a.cmd.Process.Kill(); err != nil {
+		if err := Exit(a.cmd); err != nil {
 			log.Printf("Cannot kill wallet process after failed "+
 				"client connect: %v", err)
 		}
@@ -158,7 +158,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 
 	// Create the wallet.
 	if err := a.client.CreateEncryptedWallet(a.args.walletPassphrase); err != nil {
-		if err := a.cmd.Process.Kill(); err != nil {
+		if err := Exit(a.cmd); err != nil {
 			log.Printf("Cannot kill wallet process after failed "+
 				"wallet creation: %v", err)
 		}
