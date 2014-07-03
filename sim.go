@@ -18,10 +18,6 @@ import (
 	"github.com/conformal/btcutil"
 )
 
-var (
-	shutdownChannel = make(chan bool)
-)
-
 // ChainServer describes the arguments necessary to connect a btcwallet
 // instance to a btcd websocket RPC server.
 type ChainServer struct {
@@ -125,8 +121,12 @@ func main() {
 	}
 
 	addInterruptHandler(func() {
-		Close(actors, btcd)
+		Close(actors)
 		Wait(actors)
+		err = Exit(btcd)
+		if err != nil {
+			log.Printf("Cannot kill initial btcd process: %v", err)
+		}
 	})
 
 	// Start actors.
@@ -148,10 +148,14 @@ func main() {
 	// Start mining.
 	miner, err := NewMiner(addressTable, com.stop)
 	if err != nil {
-		Close(actors, btcd)
+		Close(actors)
 		Wait(actors)
 		if miner != nil { // Miner started so we have to shut it down
 			miner.Shutdown()
+		}
+		err = Exit(btcd)
+		if err != nil {
+			log.Printf("Cannot kill initial btcd process: %v", err)
 		}
 		return
 	}
@@ -173,16 +177,15 @@ out:
 		}
 	}
 
-	Close(actors, btcd)
-
-	go func() {
-		Wait(actors)
-		miner.Shutdown()
-		shutdownChannel <- true
-	}()
+	Close(actors)
+	Wait(actors)
+	miner.Shutdown()
+	err = Exit(btcd)
+	if err != nil {
+		log.Printf("Cannot kill initial btcd process: %v", err)
+	}
 
 	// TODO: Collect statistics from the blockchain
-	<-shutdownChannel
 }
 
 // Exit closes the cmd by passing SIGINT
@@ -194,16 +197,11 @@ func Exit(cmd *exec.Cmd) error {
 	} else {
 		err = cmd.Process.Signal(os.Interrupt)
 	}
-	cmd.Wait()
 	return err
 }
 
 // Close sends close signal to actors and the exits initial btcd process.
-func Close(actors []*Actor, btcd *exec.Cmd) {
-	err := Exit(btcd)
-	if err != nil {
-		log.Printf("Cannot kill initial btcd process: %v", err)
-	}
+func Close(actors []*Actor) {
 	for _, a := range actors {
 		if err := a.Stop(); err != nil {
 			log.Printf("Cannot stop actor on %s: %v", "localhost:"+a.args.port, err)
@@ -217,9 +215,6 @@ func Wait(actors []*Actor) {
 		a.WaitForShutdown()
 		if err := a.Cleanup(); err != nil {
 			log.Printf("Cannot cleanup actor on %s directory: %v", "localhost:"+a.args.port, err)
-		}
-		if err := Exit(a.cmd); err != nil {
-			log.Printf("Cannot exit actor on %s directory: %v", "localhost:"+a.args.port, err)
 		}
 	}
 }

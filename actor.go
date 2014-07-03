@@ -216,8 +216,11 @@ out:
 		}
 	}
 
-	a.wg.Done()
 	log.Printf("Actor on %s shutdown successfully", "localhost:"+a.args.port)
+	if err := Exit(a.cmd); err != nil {
+		log.Printf("Cannot exit actor on %s directory: %v", "localhost:"+a.args.port, err)
+	}
+	a.wg.Done()
 	return nil
 }
 
