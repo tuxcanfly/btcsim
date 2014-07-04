@@ -127,6 +127,7 @@ func main() {
 		if err != nil {
 			log.Printf("Cannot kill initial btcd process: %v", err)
 		}
+		close(com.upstream)
 	})
 
 	// Start actors.
@@ -141,8 +142,14 @@ func main() {
 	}
 
 	addressTable := make([]btcutil.Address, actorsAmount)
-	for i := 0; i < actorsAmount; i++ {
-		addressTable[i] = <-com.upstream
+	for i, a := range actors {
+		select {
+		case addressTable[i] = <-com.upstream:
+		case <-a.quit:
+			// received an interrupt when addresses were being
+			// generated. can't continue simulation without addresses
+			return
+		}
 	}
 
 	// Start mining.
@@ -197,6 +204,7 @@ func Exit(cmd *exec.Cmd) error {
 	} else {
 		err = cmd.Process.Signal(os.Interrupt)
 	}
+	cmd.Wait()
 	return err
 }
 
