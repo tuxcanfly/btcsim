@@ -104,8 +104,7 @@ func main() {
 	}
 	if client == nil {
 		log.Printf("Cannot start btcd rpc client: %v", err)
-		err := Exit(btcd)
-		if err != nil {
+		if err := Exit(btcd); err != nil {
 			log.Printf("Cannot kill initial btcd process: %v", err)
 		}
 		return
@@ -123,11 +122,9 @@ func main() {
 	addInterruptHandler(func() {
 		Close(actors)
 		Wait(actors)
-		err = Exit(btcd)
-		if err != nil {
+		if err := Exit(btcd); err != nil {
 			log.Printf("Cannot kill initial btcd process: %v", err)
 		}
-		close(com.upstream)
 	})
 
 	// Start actors.
@@ -152,16 +149,17 @@ func main() {
 		}
 	}
 
+	currentBlock, _ := client.GetBlockCount()
+
 	// Start mining.
-	miner, err := NewMiner(addressTable, com.stop)
+	miner, err := NewMiner(addressTable, com.stop, int32(currentBlock))
 	if err != nil {
 		Close(actors)
 		Wait(actors)
 		if miner != nil { // Miner started so we have to shut it down
 			miner.Shutdown()
 		}
-		err = Exit(btcd)
-		if err != nil {
+		if err := Exit(btcd); err != nil {
 			log.Printf("Cannot kill initial btcd process: %v", err)
 		}
 		return
@@ -184,36 +182,39 @@ out:
 		}
 	}
 
-	Close(actors)
-	Wait(actors)
-	miner.Shutdown()
-	err = Exit(btcd)
-	if err != nil {
-		log.Printf("Cannot kill initial btcd process: %v", err)
+	// Stop mining.
+	if err := miner.client.SetGenerate(true, 0); err != nil {
+		log.Println("Cannot set miner not to generate coins: %v", err)
 	}
 
 	// TODO: Collect statistics from the blockchain
+
+	Close(actors)
+	Wait(actors)
+	miner.Shutdown()
+	if err := Exit(btcd); err != nil {
+		log.Printf("Cannot kill initial btcd process: %v", err)
+	}
 }
 
 // Exit closes the cmd by passing SIGINT
 // workaround for windows by passing SIGKILL
-func Exit(cmd *exec.Cmd) error {
-	var err error
+func Exit(cmd *exec.Cmd) (err error) {
+	defer cmd.Wait()
+
 	if runtime.GOOS == "windows" {
 		err = cmd.Process.Signal(os.Kill)
 	} else {
 		err = cmd.Process.Signal(os.Interrupt)
 	}
-	cmd.Wait()
-	return err
+
+	return
 }
 
-// Close sends close signal to actors and the exits initial btcd process.
+// Close sends close signal to actors.
 func Close(actors []*Actor) {
 	for _, a := range actors {
-		if err := a.Stop(); err != nil {
-			log.Printf("Cannot stop actor on %s: %v", "localhost:"+a.args.port, err)
-		}
+		a.Stop()
 	}
 }
 
@@ -222,7 +223,7 @@ func Wait(actors []*Actor) {
 	for _, a := range actors {
 		a.WaitForShutdown()
 		if err := a.Cleanup(); err != nil {
-			log.Printf("Cannot cleanup actor on %s directory: %v", "localhost:"+a.args.port, err)
+			log.Printf("Cannot cleanup actor directory on %s: %v", "localhost:"+a.args.port, err)
 		}
 	}
 }

@@ -74,11 +74,16 @@ func NewActor(chain *ChainServer, port uint16) (*Actor, error) {
 // be created, the wallet process is killed and the actor directory
 // removed.
 func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
+	defer a.wg.Done()
 	// Overwriting the previously created command would be sad.
 	if a.cmd != nil {
 		return errors.New("actor command previously created")
 	}
 
+	// Starting amount at 50 BTC
+	amount := btcutil.Amount(50 * btcutil.SatoshiPerBitcoin)
+	spendAfter := make(chan struct{})
+	start := true
 	balanceUpdate := make(chan btcutil.Amount, 1)
 	connected := make(chan struct{})
 	var firstConn bool
@@ -90,8 +95,8 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 
 	// Create and start command in background.
 	a.cmd = a.args.Cmd()
-	a.cmd.Stdout = stderr
-	a.cmd.Stderr = stdout
+	a.cmd.Stdout = stdout
+	a.cmd.Stderr = stderr
 	if err := a.cmd.Start(); err != nil {
 		if err := a.Cleanup(); err != nil {
 			log.Printf("Cannot remove actor directory after "+
@@ -118,9 +123,15 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 		},
 		// Update on every round bitcoin value.
 		OnAccountBalance: func(account string, balance btcutil.Amount, confirmed bool) {
-			if balance%1 == 0 && len(balanceUpdate) == 0 {
+			// Block actors at start until coinbase matures (equals or is more than 50 BTC).
+			if balance >= amount && start {
+				spendAfter <- struct{}{}
+				log.Println("Start spending funds")
+				start = false
+			}
+			if balance != 0 && len(balanceUpdate) == 0 {
 				balanceUpdate <- balance
-			} else if balance%1 == 0 {
+			} else if balance != 0 {
 				// Discard previous update
 				<-balanceUpdate
 				balanceUpdate <- balance
@@ -182,33 +193,57 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 	}
 	if err := a.client.WalletPassphrase(a.args.walletPassphrase, timeoutSecs); err != nil {
 		log.Printf("%s: Cannot unlock wallet: %v", rpcConf.Host, err)
-		return nil
+		return err
 	}
-
-	// TODO: Probably add OnRescanFinished notification and make it sync here
 
 	// Send a random address upstream that will be used by the cpu miner.
 	a.upstream <- addressSpace[rand.Int()%a.addressNum]
 
-	// Receive from downstream (ie. start spending funds) only after coinbase matures
-	a.downstream = nil
-	var balance btcutil.Amount
+	// Wait for matured coinbase
+	<-spendAfter
+	balance := <-balanceUpdate
+
+	// Start a goroutine to send addresses upstream.
+	go func() {
+		a.wg.Add(1)
+		defer a.wg.Done()
+		for {
+			select {
+			case a.upstream <- addressSpace[rand.Int()%a.addressNum]:
+				// Send address to upstream to request receiving a transaction.
+			case <-a.quit:
+				return
+			}
+		}
+	}()
+
+	// Start a goroutine to send transactions.
+	go func() {
+		a.wg.Add(1)
+		defer a.wg.Done()
+		for {
+			select {
+			case addr := <-a.downstream:
+				// Receive address from downstream to send a transaction to.
+				if _, err := a.client.SendFromMinConf("", addr, amount, 0); err != nil {
+					log.Printf("Cannot send transaction: %v", err)
+				}
+			case <-a.quit:
+				return
+			}
+		}
+	}()
 
 out:
+	// Receive account balance updates.
 	for {
 		select {
-		case a.upstream <- addressSpace[rand.Int()%a.addressNum]:
-		case addr := <-a.downstream:
-			// TODO: Probably handle following error better
-			if _, err := a.client.SendFromMinConf("", addr, 1, 0); err != nil {
-				log.Printf("%s: Cannot proceed with latest transaction: %v", rpcConf.Host, err)
-			}
 		case balance = <-balanceUpdate:
 			// Start sending funds
-			if balance > 100 && a.downstream == nil {
+			if balance >= amount && a.downstream == nil {
 				a.downstream = com.downstream
 				// else block downstream (ie. stop spending funds)
-			} else if balance == 0 && a.downstream != nil {
+			} else if balance < amount && a.downstream != nil {
 				a.downstream = nil
 			}
 		case <-a.quit:
@@ -216,25 +251,26 @@ out:
 		}
 	}
 
-	log.Printf("Actor on %s shutdown successfully", "localhost:"+a.args.port)
+	log.Printf("Actor on %s shutdown successfully", rpcConf.Host)
 	if err := Exit(a.cmd); err != nil {
-		log.Printf("Cannot exit actor on %s directory: %v", "localhost:"+a.args.port, err)
+		log.Printf("Cannot exit actor on %s: %v", rpcConf.Host, err)
 	}
-	a.wg.Done()
+
 	return nil
 }
 
-// Stop kills the Actor's wallet process and shuts down any goroutines running
-// to manage the Actor's behavior.
-func (a *Actor) Stop() error {
+// Stop closes quit channel so every running goroutine can return or
+// just exits if quit has already been closed.
+func (a *Actor) Stop() {
 	select {
 	case <-a.quit:
 	default:
 		close(a.quit)
 	}
-	return nil
 }
 
+// WaitForShutdown waits until every goroutine inside an actor, including
+// the actor goroutine itself, has returned.
 func (a *Actor) WaitForShutdown() {
 	a.wg.Wait()
 }
@@ -257,6 +293,7 @@ func (p *procArgs) Cmd() *exec.Cmd {
 
 func (p *procArgs) args() []string {
 	return []string{
+		"-d" + "TXST=warn",
 		"--simnet",
 		"--datadir=" + p.dir,
 		"--username=" + p.chainSvr.user,
