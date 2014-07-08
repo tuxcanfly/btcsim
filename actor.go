@@ -126,7 +126,6 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 			// Block actors at start until coinbase matures (equals or is more than 50 BTC).
 			if balance >= amount && start {
 				spendAfter <- struct{}{}
-				log.Println("Start spending funds")
 				start = false
 			}
 			if balance != 0 && len(balanceUpdate) == 0 {
@@ -199,8 +198,20 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 	// Send a random address upstream that will be used by the cpu miner.
 	a.upstream <- addressSpace[rand.Int()%a.addressNum]
 
+	select {
 	// Wait for matured coinbase
-	<-spendAfter
+	case <-spendAfter:
+		log.Println("Start spending funds")
+	case <-a.quit:
+		// If the simulation ends for any reason before the actor's coinbase
+		// matures, we don't want it to get stuck on spendAfter.
+		log.Printf("Early quit: Actor on %s shutdown successfully", rpcConf.Host)
+		if err := Exit(a.cmd); err != nil {
+			log.Printf("Cannot exit actor on %s: %v", rpcConf.Host, err)
+		}
+		return nil
+	}
+
 	balance := <-balanceUpdate
 
 	// Start a goroutine to send addresses upstream.
@@ -251,11 +262,6 @@ out:
 		}
 	}
 
-	log.Printf("Actor on %s shutdown successfully", rpcConf.Host)
-	if err := Exit(a.cmd); err != nil {
-		log.Printf("Cannot exit actor on %s: %v", rpcConf.Host, err)
-	}
-
 	return nil
 }
 
@@ -270,9 +276,14 @@ func (a *Actor) Stop() {
 }
 
 // WaitForShutdown waits until every goroutine inside an actor, including
-// the actor goroutine itself, has returned.
+// the actor goroutine itself, has returned and kills the respective
+// btcwallet process.
 func (a *Actor) WaitForShutdown() {
 	a.wg.Wait()
+	log.Printf("Actor on %s shutdown successfully", "localhost:"+a.args.port)
+	if err := Exit(a.cmd); err != nil {
+		log.Printf("Cannot exit actor on %s: %v", "localhost:"+a.args.port, err)
+	}
 }
 
 // Cleanup removes the directory an Actor's wallet process was previously using.
