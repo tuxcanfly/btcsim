@@ -19,6 +19,7 @@ import (
 	"github.com/conformal/btcjson"
 	rpc "github.com/conformal/btcrpcclient"
 	"github.com/conformal/btcutil"
+	"github.com/conformal/btcwire"
 )
 
 // Actor describes an actor on the simulation network.  Each actor runs
@@ -30,6 +31,7 @@ type Actor struct {
 	maxAddresses int
 	downstream   chan btcutil.Address
 	upstream     chan btcutil.Address
+	txPool       chan btcwire.MsgTx
 	stop         chan struct{}
 	quit         chan struct{}
 	wg           sync.WaitGroup
@@ -63,6 +65,8 @@ func NewActor(chain *ChainServer, port uint16) (*Actor, error) {
 	return &a, nil
 }
 
+var spendAfter chan struct{}
+
 // Start creates the command to execute a wallet process and starts the
 // command in the background, attaching the command's stderr and stdout
 // to the passed writers. Nil writers may be used to discard output.
@@ -82,7 +86,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 
 	// Starting amount at 50 BTC
 	amount := btcutil.Amount(50 * btcutil.SatoshiPerBitcoin)
-	spendAfter := make(chan struct{})
+	spendAfter = make(chan struct{})
 	start := true
 	connected := make(chan struct{})
 	var firstConn bool
@@ -90,6 +94,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 
 	a.downstream = com.downstream
 	a.upstream = com.upstream
+	a.txPool = com.txPool
 	a.stop = com.stop
 
 	// Create and start command in background.
@@ -239,10 +244,10 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 					log.Printf("%s: Not all inputs have been signed", rpcConf.Host)
 					continue
 				}
-				// and finally send it.
-				if _, err := a.client.SendRawTransaction(msgTx, false); err != nil {
-					log.Printf("%s: Cannot send raw transaction: %v", rpcConf.Host, err)
-					continue
+				select {
+				case a.txPool <- *msgTx:
+				case <-a.quit:
+					return
 				}
 			case <-a.quit:
 				return

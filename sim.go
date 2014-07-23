@@ -47,6 +47,7 @@ var defaultChainServer = ChainServer{
 type Communication struct {
 	upstream   chan btcutil.Address
 	downstream chan btcutil.Address
+	txPool     chan btcwire.MsgTx
 	stop       chan struct{}
 }
 
@@ -63,6 +64,10 @@ var (
 
 	// maxAddresses defines the number of addresses to generate per actor
 	maxAddresses = flag.Int("maxaddresses", 1000, "Maximum addresses per actor")
+
+	// txCurvePath is the path to a CSV file containing the block vs no. of transactions curve
+	txCurvePath = flag.String("txcurve", "",
+		"Path to the CSV File containing <block #>, <txCount> fields")
 )
 
 func main() {
@@ -70,6 +75,16 @@ func main() {
 	rand.Seed(int64(time.Now().Nanosecond()))
 
 	flag.Parse()
+	var txCurve map[int]int
+	if *txCurvePath != "" {
+		var err error
+		txCurve, err = readCSV(*txCurvePath)
+		if err != nil {
+			log.Fatalf("Error reading tx curve CSV: %v", err)
+			return
+		}
+	}
+	maxTx := 10000
 
 	actors := make([]*Actor, 0, *maxActors)
 	var wg sync.WaitGroup
@@ -77,6 +92,7 @@ func main() {
 	com := Communication{
 		upstream:   make(chan btcutil.Address, *maxActors),
 		downstream: make(chan btcutil.Address, *maxActors),
+		txPool:     make(chan btcwire.MsgTx, maxTx),
 		stop:       make(chan struct{}, *maxActors),
 	}
 
@@ -257,6 +273,40 @@ func main() {
 				return
 			case <-exit:
 				return
+			}
+		}
+	}()
+
+	// Start goroutine to pool txns and send them together
+	go func() {
+	out:
+		for _, txCount := range txCurve {
+		next:
+			// wait until pool is filled with required
+			// number of transactions
+			for {
+				// handle interrupt
+				select {
+				case <-com.stop:
+					break out
+				default:
+					if len(com.txPool) >= txCount {
+						// pool is ready, send required number of txns
+						for i := 0; i < txCount; i++ {
+							select {
+							case tx := <-com.txPool:
+								if txHash, err := miner.client.SendRawTransaction(&tx, false); err != nil {
+									log.Printf("Cannot send raw txn: %v", err)
+								} else {
+									log.Printf("Sent txn: %v", txHash)
+								}
+							case <-com.stop:
+								break out
+							}
+						}
+						continue next
+					}
+				}
 			}
 		}
 	}()
