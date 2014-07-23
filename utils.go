@@ -1,40 +1,58 @@
 package main
 
-// place and start of file io utils for sim configurations
-
 import (
 	"encoding/csv"
 	"io"
+	"log"
 	"os"
 	"strconv"
 )
 
-// reads csv of two columns of ints
-func readCSV(f string) (map[int]int, error) {
-	file, err := os.Open(f)
-	defer file.Close()
-	if err != nil {
-		return nil, err
-	}
-	reader := csv.NewReader(file)
-	reader.Comma = ','
-	params := make(map[int]int)
-	for {
-		row, err := reader.Read()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, err
-		}
-		k, err := strconv.Atoi(row[0])
+// Row represents a row in the CSV file
+// and holds the key and value ints
+type Row struct {
+	k int
+	v int
+}
+
+// readCSV reads the given filename and
+// returns a channel of rows
+func readCSV(f string) chan *Row {
+	rows := make(chan *Row)
+	// Start a goroutine to read the CSV and
+	// send the rows to the channel
+	go func() {
+		defer func() {
+			close(rows)
+		}()
+		file, err := os.Open(f)
+		defer file.Close()
 		if err != nil {
-			return nil, err
+			log.Fatalf("Cannot read CSV: %v", err)
+			return
 		}
-		v, err := strconv.Atoi(row[1])
-		if err != nil {
-			return nil, err
+		reader := csv.NewReader(file)
+		reader.Comma = ','
+		for {
+			row, err := reader.Read()
+			if err == io.EOF {
+				break
+			} else if err != nil {
+				log.Fatalf("Error reading CSV: %v", err)
+				return
+			}
+			k, err := strconv.Atoi(row[0])
+			if err != nil {
+				log.Fatalf("Error reading int key: %v", err)
+				return
+			}
+			v, err := strconv.Atoi(row[1])
+			if err != nil {
+				log.Fatalf("Error reading int value: %v", err)
+				return
+			}
+			rows <- &Row{k: k, v: v}
 		}
-		params[k] = v
-	}
-	return params, nil
+	}()
+	return rows
 }

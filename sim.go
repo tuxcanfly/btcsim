@@ -75,10 +75,10 @@ func main() {
 	rand.Seed(int64(time.Now().Nanosecond()))
 
 	flag.Parse()
-	var txCurve map[int]int
+	var txCurve chan *Row
 	if *txCurvePath != "" {
 		var err error
-		txCurve, err = readCSV(*txCurvePath)
+		txCurve = readCSV(*txCurvePath)
 		if err != nil {
 			log.Fatalf("Error reading tx curve CSV: %v", err)
 			return
@@ -292,10 +292,11 @@ func main() {
 		// txnTotal counts the number of all transactions sent
 		var txnTotal int64
 	out:
-		for _, txnCount := range txCurve {
-		next:
+		for row := range txCurve {
+			txnCount := row.v
 			// wait until pool is filled with required
 			// number of transactions
+		next:
 			for {
 				// handle interrupt
 				select {
@@ -307,17 +308,19 @@ func main() {
 						for i := 0; i < txnCount; i++ {
 							select {
 							case tx := <-com.txPool:
-								if txHash, err := miner.client.SendRawTransaction(&tx, false); err != nil {
+								txHash, err := miner.client.SendRawTransaction(&tx, false)
+								if err != nil {
 									log.Printf("Cannot send raw txn: %v", err)
-								} else {
-									txnTotal++
-									log.Printf("Sent txn: %v", txHash)
+									continue
 								}
+								log.Printf("Sent tx: %v", txHash)
+								txnTotal++
 							case <-com.stop:
 								break out
 							}
 						}
-						continue next
+						// move on to the next row
+						break next
 					}
 				}
 			}
