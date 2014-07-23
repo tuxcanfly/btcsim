@@ -259,6 +259,7 @@ func main() {
 	tpbChan := make(chan float64, 1)
 	// Start a goroutine to receive transaction times
 	go func() {
+		var firstBlockCount int64
 		var first, last time.Time
 		firstTx := true
 
@@ -267,6 +268,10 @@ func main() {
 			case last = <-timeReceived:
 				if firstTx {
 					first = last
+					firstBlockCount, err = client.GetBlockCount()
+					if err != nil {
+						log.Printf("Cannot get block count: %v", err)
+					}
 					firstTx = false
 				}
 			case <-com.stop:
@@ -274,11 +279,14 @@ func main() {
 				diff := last.Sub(first)
 				tpsChan <- float64(txnCount) / diff.Seconds()
 				close(tpsChan)
-				blocks, err := client.GetBlockCount()
+
+				currentBlockCount, err := client.GetBlockCount()
 				if err != nil {
 					log.Printf("Cannot get block count: %v", err)
 				}
-				tpbChan <- float64(txnCount) / float64(blocks)
+				txBlockCount := currentBlockCount - firstBlockCount
+
+				tpbChan <- float64(txnCount) / float64(txBlockCount)
 				close(tpbChan)
 				return
 			case <-exit:
