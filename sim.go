@@ -252,6 +252,9 @@ func main() {
 	// tpsChan is used to deliver the average transactions per second
 	// of a simulation
 	tpsChan := make(chan float64, 1)
+	// tpbChan is used to deliver the average transactions per block
+	// of a simulation
+	tpbChan := make(chan float64, 1)
 	// Start a goroutine to receive transaction times
 	go func() {
 		var first, last time.Time
@@ -270,6 +273,12 @@ func main() {
 				diff := last.Sub(first)
 				tpsChan <- float64(txnCount) / diff.Seconds()
 				close(tpsChan)
+				blocks, err := client.GetBlockCount()
+				if err != nil {
+					log.Printf("Cannot get block count: %v", err)
+				}
+				tpbChan <- float64(txnCount) / float64(blocks)
+				close(tpbChan)
 				return
 			case <-exit:
 				return
@@ -345,6 +354,11 @@ out:
 	tps, ok := <-tpsChan
 	if ok {
 		log.Printf("Average transactions per sec: %.2f", tps)
+	}
+
+	tpb, ok := <-tpbChan
+	if ok {
+		log.Printf("Average transactions per block: %.2f", tpb)
 	}
 
 	// Write info about every simulation in permanent store
