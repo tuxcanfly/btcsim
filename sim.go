@@ -316,12 +316,14 @@ func main() {
 						for i := 0; i < txnCount; i++ {
 							select {
 							case tx := <-com.txPool:
-								txHash, err := miner.client.SendRawTransaction(&tx, false)
-								if err != nil {
-									log.Printf("Cannot send raw txn: %v", err)
-									continue
-								}
-								log.Printf("Sent tx: %v", txHash)
+								go func() {
+									txHash, err := miner.client.SendRawTransaction(&tx, false)
+									if err != nil {
+										log.Printf("Cannot send raw txn: %v", err)
+										return
+									}
+									log.Printf("Sent tx: %v", txHash)
+								}()
 								txnTotal++
 							case <-com.stop:
 								break out
