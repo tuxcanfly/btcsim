@@ -249,6 +249,8 @@ func main() {
 	// Add mining btcd listen interface as a node
 	client.AddNode("localhost:18550", rpc.ANAdd)
 
+	// txnChan is used to count total number of transactions sent
+	txnChan := make(chan int64, 1)
 	// tpsChan is used to deliver the average transactions per second
 	// of a simulation
 	tpsChan := make(chan float64, 1)
@@ -258,7 +260,6 @@ func main() {
 	// Start a goroutine to receive transaction times
 	go func() {
 		var first, last time.Time
-		var txnCount int
 		firstTx := true
 
 		for {
@@ -268,8 +269,8 @@ func main() {
 					first = last
 					firstTx = false
 				}
-				txnCount++
 			case <-com.stop:
+				txnCount := <-txnChan
 				diff := last.Sub(first)
 				tpsChan <- float64(txnCount) / diff.Seconds()
 				close(tpsChan)
@@ -288,8 +289,10 @@ func main() {
 
 	// Start goroutine to pool txns and send them together
 	go func() {
+		// txnTotal counts the number of all transactions sent
+		var txnTotal int64
 	out:
-		for _, txCount := range txCurve {
+		for _, txnCount := range txCurve {
 		next:
 			// wait until pool is filled with required
 			// number of transactions
@@ -299,14 +302,15 @@ func main() {
 				case <-com.stop:
 					break out
 				default:
-					if len(com.txPool) >= txCount {
+					if len(com.txPool) >= txnCount {
 						// pool is ready, send required number of txns
-						for i := 0; i < txCount; i++ {
+						for i := 0; i < txnCount; i++ {
 							select {
 							case tx := <-com.txPool:
 								if txHash, err := miner.client.SendRawTransaction(&tx, false); err != nil {
 									log.Printf("Cannot send raw txn: %v", err)
 								} else {
+									txnTotal++
 									log.Printf("Sent txn: %v", txHash)
 								}
 							case <-com.stop:
@@ -318,6 +322,7 @@ func main() {
 				}
 			}
 		}
+		txnChan <- txnTotal
 	}()
 
 out:
