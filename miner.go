@@ -28,7 +28,7 @@ type Miner struct {
 
 // NewMiner starts a cpu-mining enabled btcd instane and returns an rpc client
 // to control it.
-func NewMiner(addressTable []btcutil.Address, stop chan struct{}, currentBlock int32) (*Miner, error) {
+func NewMiner(addressTable []btcutil.Address, stop chan struct{}, start chan struct{}, currentBlock int32) (*Miner, error) {
 
 	datadir, err := ioutil.TempDir("", "minerData")
 	if err != nil {
@@ -86,6 +86,9 @@ func NewMiner(addressTable []btcutil.Address, stop chan struct{}, currentBlock i
 			}
 			if height == int32(*maxBlocks) {
 				close(stop)
+			}
+			if height == int32(*matureBlock) {
+				start <- struct{}{}
 			}
 		},
 	}

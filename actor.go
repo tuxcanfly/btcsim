@@ -19,7 +19,6 @@ import (
 	"github.com/conformal/btcjson"
 	rpc "github.com/conformal/btcrpcclient"
 	"github.com/conformal/btcutil"
-	"github.com/conformal/btcwire"
 )
 
 // Actor describes an actor on the simulation network.  Each actor runs
@@ -31,7 +30,6 @@ type Actor struct {
 	maxAddresses int
 	downstream   chan btcutil.Address
 	upstream     chan btcutil.Address
-	txPool       chan btcwire.MsgTx
 	stop         chan struct{}
 	quit         chan struct{}
 	wg           sync.WaitGroup
@@ -92,7 +90,6 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 
 	a.downstream = com.downstream
 	a.upstream = com.upstream
-	a.txPool = com.txPool
 	a.stop = com.stop
 
 	// Create and start command in background.
@@ -242,10 +239,10 @@ func (a *Actor) Start(stderr, stdout io.Writer, com Communication) error {
 					log.Printf("%s: Not all inputs have been signed", rpcConf.Host)
 					continue
 				}
-				select {
-				case a.txPool <- *msgTx:
-				case <-a.quit:
-					return
+				// and finally send it.
+				if _, err := a.client.SendRawTransaction(msgTx, false); err != nil {
+					log.Printf("%s: Cannot send raw transaction: %v", rpcConf.Host, err)
+					continue
 				}
 			case <-a.quit:
 				return

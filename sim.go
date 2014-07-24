@@ -47,8 +47,8 @@ var defaultChainServer = ChainServer{
 type Communication struct {
 	upstream   chan btcutil.Address
 	downstream chan btcutil.Address
-	txPool     chan btcwire.MsgTx
 	stop       chan struct{}
+	start      chan struct{}
 }
 
 var (
@@ -60,7 +60,10 @@ var (
 
 	// maxBlocks defines how many blocks have to connect to the blockchain
 	// before the simulation normally stops
-	maxBlocks = flag.Int("maxblocks", 13000, "Maximum blocks to generate")
+	maxBlocks = flag.Int("maxblocks", 20000, "Maximum blocks to generate")
+
+	// matureBlock defines after which block the blockchain is mature enough
+	matureBlock = flag.Int("matureblock", 16200, "Block number at blockchain maturity")
 
 	// maxAddresses defines the number of addresses to generate per actor
 	maxAddresses = flag.Int("maxaddresses", 1000, "Maximum addresses per actor")
@@ -84,7 +87,6 @@ func main() {
 			return
 		}
 	}
-	maxTx := 10000
 
 	actors := make([]*Actor, 0, *maxActors)
 	var wg sync.WaitGroup
@@ -92,8 +94,8 @@ func main() {
 	com := Communication{
 		upstream:   make(chan btcutil.Address, *maxActors),
 		downstream: make(chan btcutil.Address, *maxActors),
-		txPool:     make(chan btcwire.MsgTx, maxTx),
 		stop:       make(chan struct{}, *maxActors),
+		start:      make(chan struct{}, *maxActors),
 	}
 
 	// Save info about the simulation in permanent store.
@@ -229,7 +231,7 @@ func main() {
 	}
 
 	// Start mining.
-	miner, err := NewMiner(addressTable, com.stop, int32(currentBlock))
+	miner, err := NewMiner(addressTable, com.stop, com.start, int32(currentBlock))
 	if err != nil {
 		Close(actors, &wg)
 		if miner != nil { // Miner started so we have to shut it down
@@ -249,8 +251,6 @@ func main() {
 	// Add mining btcd listen interface as a node
 	client.AddNode("localhost:18550", rpc.ANAdd)
 
-	// txnChan is used to count total number of transactions sent
-	txnChan := make(chan int64, 1)
 	// tpsChan is used to deliver the average transactions per second
 	// of a simulation
 	tpsChan := make(chan float64, 1)
@@ -261,6 +261,7 @@ func main() {
 	go func() {
 		var firstBlockCount int64
 		var first, last time.Time
+		var txnCount int
 		firstTx := true
 
 		for {
@@ -274,8 +275,8 @@ func main() {
 					}
 					firstTx = false
 				}
+				txnCount++
 			case <-com.stop:
-				txnCount := <-txnChan
 				diff := last.Sub(first)
 				tpsChan <- float64(txnCount) / diff.Seconds()
 				close(tpsChan)
@@ -295,57 +296,33 @@ func main() {
 		}
 	}()
 
-	// Start goroutine to pool txns and send them together
-	go func() {
-		// txnTotal counts the number of all transactions sent
-		var txnTotal int64
-	out:
-		for row := range txCurve {
-			txnCount := row.v
-			// wait until pool is filled with required
-			// number of transactions
-		next:
-			for {
-				// handle interrupt
-				select {
-				case <-com.stop:
-					break out
-				default:
-					if len(com.txPool) >= txnCount {
-						// pool is ready, send required number of txns
-						for i := 0; i < txnCount; i++ {
-							select {
-							case tx := <-com.txPool:
-								go func() {
-									txHash, err := miner.client.SendRawTransaction(&tx, false)
-									if err != nil {
-										log.Printf("Cannot send raw txn: %v", err)
-										return
-									}
-									log.Printf("Sent tx: %v", txHash)
-								}()
-								txnTotal++
-							case <-com.stop:
-								break out
-							}
-						}
-						// move on to the next row
-						break next
-					}
-				}
-			}
-		}
-		txnChan <- txnTotal
-	}()
-
 out:
 	for {
 		select {
-		case addr := <-com.upstream:
-			select {
-			case com.downstream <- addr:
-			case <-com.stop:
-				break out
+		case <-com.start:
+			for row := range txCurve {
+				// disable mining until the required no. of tx are in mempool
+				err := miner.client.SetGenerate(false, 0)
+				if err != nil {
+					log.Printf("Cannot set miner not to generate coins: %v", err)
+				}
+				// each address sent to com.downstream generates 1 tx
+				for i := 0; i < row.v; i++ {
+					select {
+					case addr := <-com.upstream:
+						select {
+						case com.downstream <- addr:
+						case <-com.stop:
+							break out
+						}
+					}
+				}
+				// TODO: block until tx are generated
+				// mine the above tx in the next block
+				err = miner.client.SetGenerate(true, 1)
+				if err != nil {
+					log.Printf("Cannot set miner to generate coins: %v", err)
+				}
 			}
 		case <-com.stop:
 			// Normal simulation exit
