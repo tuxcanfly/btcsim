@@ -68,6 +68,10 @@ var (
 	// maxAddresses defines the number of addresses to generate per actor
 	maxAddresses = flag.Int("maxaddresses", 1000, "Maximum addresses per actor")
 
+	// maxBlocksMined defines the maximum blocks that can be generated when
+	// the blockchain is mature and mining is controlled
+	maxBlocksMined = flag.Int("maxblocksmined", 25, "Maximum blocks generated with controlled mining")
+
 	// txCurvePath is the path to a CSV file containing the block vs no. of transactions curve
 	txCurvePath = flag.String("txcurve", "",
 		"Path to the CSV File containing <block #>, <txCount> fields")
@@ -95,7 +99,7 @@ func main() {
 		upstream:   make(chan btcutil.Address, *maxActors),
 		downstream: make(chan btcutil.Address, *maxActors),
 		stop:       make(chan struct{}, *maxActors),
-		start:      make(chan struct{}, *maxActors),
+		start:      make(chan struct{}, *maxBlocksMined),
 	}
 
 	// Save info about the simulation in permanent store.
@@ -297,32 +301,30 @@ func main() {
 	}()
 
 out:
-	for {
+	for row := range txCurve {
 		select {
 		case <-com.start:
-			for row := range txCurve {
-				// disable mining until the required no. of tx are in mempool
-				err := miner.client.SetGenerate(false, 0)
-				if err != nil {
-					log.Printf("Cannot set miner not to generate coins: %v", err)
-				}
-				// each address sent to com.downstream generates 1 tx
-				for i := 0; i < row.v; i++ {
+			// disable mining until the required no. of tx are in mempool
+			err := miner.client.SetGenerate(false, 0)
+			if err != nil {
+				log.Printf("Cannot set miner not to generate coins: %v", err)
+			}
+			// each address sent to com.downstream generates 1 tx
+			for i := 0; i < row.v; i++ {
+				select {
+				case addr := <-com.upstream:
 					select {
-					case addr := <-com.upstream:
-						select {
-						case com.downstream <- addr:
-						case <-com.stop:
-							break out
-						}
+					case com.downstream <- addr:
+					case <-com.stop:
+						break out
 					}
 				}
-				// TODO: block until tx are generated
-				// mine the above tx in the next block
-				err = miner.client.SetGenerate(true, 1)
-				if err != nil {
-					log.Printf("Cannot set miner to generate coins: %v", err)
-				}
+			}
+			// TODO: block until tx are generated
+			// mine the above tx in the next block
+			err = miner.client.SetGenerate(true, 1)
+			if err != nil {
+				log.Printf("Cannot set miner to generate coins: %v", err)
 			}
 		case <-com.stop:
 			// Normal simulation exit

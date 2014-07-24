@@ -87,7 +87,7 @@ func NewMiner(addressTable []btcutil.Address, stop chan struct{}, start chan str
 			if height == int32(*maxBlocks) {
 				close(stop)
 			}
-			if height == int32(*matureBlock) {
+			if height >= int32(*matureBlock) {
 				start <- struct{}{}
 			}
 		},
