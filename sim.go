@@ -70,7 +70,7 @@ var (
 
 	// maxBlocksMined defines the maximum blocks that can be generated when
 	// the blockchain is mature and mining is controlled
-	maxBlocksMined = flag.Int("maxblocksmined", 25, "Maximum blocks generated with controlled mining")
+	maxBlocksMined = flag.Int("maxblocksmined", 100, "Maximum blocks generated with controlled mining")
 
 	// txCurvePath is the path to a CSV file containing the block vs no. of transactions curve
 	txCurvePath = flag.String("txcurve", "",
@@ -317,6 +317,9 @@ out:
 					case com.downstream <- addr:
 					case <-com.stop:
 						break out
+					case <-exit:
+						// Interrupt handler has finished so exit
+						return
 					}
 				}
 			}
