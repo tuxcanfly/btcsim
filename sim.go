@@ -211,6 +211,14 @@ func main() {
 	if err != nil {
 		log.Printf("Cannot get block count: %v", err)
 	}
+	if currentBlock >= int64(*maxBlocks) {
+		log.Fatalf("Already generated maxblocks. Increase -maxblocks or reset the blockchain")
+		Close(actors, &wg)
+		if err := Exit(btcd); err != nil {
+			log.Printf("Cannot kill initial btcd process: %v", err)
+		}
+		return
+	}
 
 	// Start mining.
 	miner, err := NewMiner(addressTable, com.stop, int32(currentBlock))
