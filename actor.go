@@ -252,25 +252,33 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 				msgTx, err := a.client.CreateRawTransaction(inputs, amounts)
 				if err != nil {
 					log.Printf("%s: Cannot create raw transaction: %v", rpcConf.Host, err)
-					a.txErrChan <- err
+					if a.txErrChan != nil {
+						a.txErrChan <- err
+					}
 					continue
 				}
 				// sign it
 				msgTx, ok, err := a.client.SignRawTransaction(msgTx)
 				if err != nil {
 					log.Printf("%s: Cannot sign raw transaction: %v", rpcConf.Host, err)
-					a.txErrChan <- err
+					if a.txErrChan != nil {
+						a.txErrChan <- err
+					}
 					continue
 				}
 				if !ok {
 					log.Printf("%s: Not all inputs have been signed", rpcConf.Host)
-					a.txErrChan <- err
+					if a.txErrChan != nil {
+						a.txErrChan <- err
+					}
 					continue
 				}
 				// and finally send it.
 				if _, err := a.client.SendRawTransaction(msgTx, false); err != nil {
 					log.Printf("%s: Cannot send raw transaction: %v", rpcConf.Host, err)
-					a.txErrChan <- err
+					if a.txErrChan != nil {
+						a.txErrChan <- err
+					}
 					continue
 				}
 			case <-a.quit:

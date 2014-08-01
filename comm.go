@@ -45,7 +45,6 @@ func NewCommunication() *Communication {
 		interrupt:        make(chan struct{}),
 		waitForInterrupt: make(chan struct{}),
 		errChan:          make(chan struct{}, *maxActors),
-		txErrChan:        make(chan error, *maxActors),
 	}
 }
 
@@ -261,9 +260,7 @@ func (com *Communication) CommunicateTxCurve(txCurve []*Row, miner *Miner) {
 				// or we receive an error from the actors
 				select {
 				case <-com.txpool:
-				case err := <-com.txErrChan:
-					log.Printf("Tx error: %v", err)
-					return
+				case <-com.txErrChan:
 				case <-com.interrupt:
 					// Interrupt received
 					<-com.waitForInterrupt

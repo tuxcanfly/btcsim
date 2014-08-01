@@ -94,6 +94,7 @@ func main() {
 		// both are required only for generating tx curve
 		com.start = make(chan struct{})
 		com.txpool = make(chan struct{})
+		com.txErrChan = make(chan error, *maxActors)
 	}
 
 	btcdHomeDir := btcutil.AppDataDir("btcd", false)
