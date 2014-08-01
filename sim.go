@@ -95,6 +95,7 @@ func main() {
 		com.start = make(chan struct{})
 		com.txpool = make(chan struct{})
 		com.txErrChan = make(chan error, *maxActors)
+		com.txChan = make(chan btcwire.MsgTx, *maxActors)
 	}
 
 	btcdHomeDir := btcutil.AppDataDir("btcd", false)

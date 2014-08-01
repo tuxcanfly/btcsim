@@ -19,6 +19,7 @@ import (
 	"github.com/conformal/btcjson"
 	rpc "github.com/conformal/btcrpcclient"
 	"github.com/conformal/btcutil"
+	"github.com/conformal/btcwire"
 )
 
 // minFee is the minimum tx fee that can be paid
@@ -35,6 +36,7 @@ type Actor struct {
 	upstream     chan btcutil.Address
 	errChan      chan struct{}
 	txErrChan    chan error
+	txChan       chan btcwire.MsgTx
 	stop         chan struct{}
 	quit         chan struct{}
 	wg           sync.WaitGroup
@@ -84,6 +86,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 	a.upstream = com.upstream
 	a.errChan = com.errChan
 	a.txErrChan = com.txErrChan
+	a.txChan = com.txChan
 
 	// Overwriting the previously created command would be sad.
 	if a.cmd != nil {
@@ -273,14 +276,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 					}
 					continue
 				}
-				// and finally send it.
-				if _, err := a.client.SendRawTransaction(msgTx, false); err != nil {
-					log.Printf("%s: Cannot send raw transaction: %v", rpcConf.Host, err)
-					if a.txErrChan != nil {
-						a.txErrChan <- err
-					}
-					continue
-				}
+				a.txChan <- *msgTx
 			case <-a.quit:
 				return
 			}

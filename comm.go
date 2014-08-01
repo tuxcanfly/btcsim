@@ -13,6 +13,7 @@ import (
 
 	rpc "github.com/conformal/btcrpcclient"
 	"github.com/conformal/btcutil"
+	"github.com/conformal/btcwire"
 )
 
 // Communication is consisted of the necessary primitives used
@@ -29,6 +30,7 @@ type Communication struct {
 	errChan          chan struct{}
 	start            chan struct{}
 	txpool           chan struct{}
+	txChan           chan btcwire.MsgTx
 	txErrChan        chan error
 }
 
@@ -119,7 +121,7 @@ func (com *Communication) Start(actors []*Actor, client *rpc.Client, btcd *exec.
 	// Start a goroutine to coordinate transactions
 	com.wg.Add(1)
 	if txCurve != nil {
-		go com.CommunicateTxCurve(txCurve, miner)
+		go com.CommunicateTxCurve(client, txCurve, miner)
 	} else {
 		go com.Communicate()
 	}
@@ -229,17 +231,10 @@ func (com *Communication) Communicate() {
 
 // CommunicateTxCurve generates tx and controls the mining according
 // to the input block height vs tx count curve
-func (com *Communication) CommunicateTxCurve(txCurve []*Row, miner *Miner) {
+func (com *Communication) CommunicateTxCurve(client *rpc.Client, txCurve []*Row, miner *Miner) {
 	defer com.wg.Done()
-
-	for _, row := range txCurve {
-		select {
-		case <-com.start:
-			// disable mining until the required no. of tx are in mempool
-			if err := miner.client.SetGenerate(false, 0); err != nil {
-				log.Printf("Cannot call setgenerate: %v", err)
-				return
-			}
+	go func() {
+		for _, row := range txCurve {
 			// each address sent to com.downstream generates 1 tx
 			for i := 0; i < row.v; i++ {
 				select {
@@ -253,6 +248,28 @@ func (com *Communication) CommunicateTxCurve(txCurve []*Row, miner *Miner) {
 						<-com.waitForInterrupt
 						return
 					}
+				}
+			}
+		}
+	}()
+
+	for _, row := range txCurve {
+		select {
+		case <-com.start:
+			// disable mining until the required no. of tx are in mempool
+			if err := miner.client.SetGenerate(false, 0); err != nil {
+				log.Printf("Cannot call setgenerate: %v", err)
+				return
+			}
+			for i := 0; i < row.v; i++ {
+				select {
+				case msgTx := <-com.txChan:
+					// and finally send it.
+					if _, err := client.SendRawTransaction(&msgTx, false); err != nil {
+						log.Printf("%s: Cannot send raw transaction: %v", err)
+						continue
+					}
+				case <-com.txErrChan:
 				}
 			}
 			for i := 0; i < row.v; i++ {
