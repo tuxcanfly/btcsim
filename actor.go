@@ -256,7 +256,11 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 				if err != nil {
 					log.Printf("%s: Cannot create raw transaction: %v", rpcConf.Host, err)
 					if a.txErrChan != nil {
-						a.txErrChan <- err
+						select {
+						case a.txErrChan <- err:
+						case <-a.quit:
+							return
+						}
 					}
 					continue
 				}
@@ -265,18 +269,30 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 				if err != nil {
 					log.Printf("%s: Cannot sign raw transaction: %v", rpcConf.Host, err)
 					if a.txErrChan != nil {
-						a.txErrChan <- err
+						select {
+						case a.txErrChan <- err:
+						case <-a.quit:
+							return
+						}
 					}
 					continue
 				}
 				if !ok {
 					log.Printf("%s: Not all inputs have been signed", rpcConf.Host)
 					if a.txErrChan != nil {
-						a.txErrChan <- err
+						select {
+						case a.txErrChan <- err:
+						case <-a.quit:
+							return
+						}
 					}
 					continue
 				}
-				a.txChan <- *msgTx
+				select {
+				case a.txChan <- *msgTx:
+				case <-a.quit:
+					return
+				}
 			case <-a.quit:
 				return
 			}
