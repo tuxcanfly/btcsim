@@ -88,10 +88,13 @@ func NewMiner(addressTable []btcutil.Address, stop chan<- struct{},
 			if height == int32(*maxBlocks) {
 				close(stop)
 			}
-			if height >= int32(*matureBlock) {
-				if start != nil {
-					start <- struct{}{}
+			select {
+			case <-spendAfter:
+				select {
+				case start <- struct{}{}:
+				default:
 				}
+			default:
 			}
 		},
 		// Send a signal that a tx has been accepted into the mempool. Based on

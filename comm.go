@@ -118,13 +118,60 @@ func (com *Communication) Start(actors []*Actor, client *rpc.Client, btcd *exec.
 	go com.estimateTps(tpsChan)
 
 	// Start a goroutine to coordinate transactions
-	com.wg.Add(1)
-	if txCurve != nil {
-		go com.CommunicateTxCurve(txCurve, miner)
-	} else {
-		go com.Communicate()
-	}
-
+	next := make(chan struct{}, 100)
+	com.wg.Add(3)
+	go com.Communicate(txCurve)
+	go func() {
+		defer com.wg.Done()
+		for _, row := range txCurve {
+			// block until either tx pool gets accepted by miner
+			// or we receive an error from the actors
+			for i := 0; i < row.v; i++ {
+				select {
+				case <-com.txpool:
+				case err := <-com.txErrChan:
+					log.Printf("Tx error: %v", err)
+					return
+				case <-com.interrupt:
+					// Interrupt received
+					<-com.waitForInterrupt
+					return
+				}
+			}
+			next <- struct{}{}
+		}
+		close(next)
+		// mine the above tx in the next block
+	}()
+	go func() {
+		defer com.wg.Done()
+	out:
+		for {
+			select {
+			case <-com.start:
+				// disable mining until the required no. of tx are in mempool
+				if err := miner.client.SetGenerate(false, 0); err != nil {
+					log.Printf("Cannot call setgenerate: %v", err)
+					return
+				}
+				_, ok := <-next
+				if !ok {
+					com.stop <- struct{}{}
+					break out
+				}
+				if err := miner.client.SetGenerate(true, 1); err != nil {
+					log.Printf("Cannot call setgenerate: %v", err)
+					return
+				}
+			case <-com.stop:
+				return
+			case <-com.interrupt:
+				// Interrupt received
+				<-com.waitForInterrupt
+				return
+			}
+		}
+	}()
 	// Start a goroutine for shuting down the simulation when appropriate
 	com.wg.Add(1)
 	go com.Shutdown(miner, actors, btcd)
@@ -195,14 +242,26 @@ func (com *Communication) estimateTps(tpsChan chan<- float64) {
 // Communicate handles the main part of the communication; receiving
 // and sending of addresses to actors ie. enables transactions to
 // happen.
-func (com *Communication) Communicate() {
+func (com *Communication) Communicate(txCurve []*Row) {
 	defer com.wg.Done()
 
-	for {
-		select {
-		case addr := <-com.upstream:
+	for _, row := range txCurve {
+		for i := 0; i < row.v; i++ {
 			select {
-			case com.downstream <- addr:
+			case addr := <-com.upstream:
+				select {
+				case com.downstream <- addr:
+				case <-com.stop:
+					// Normal simulation exit
+					return
+				case <-com.fail:
+					// All actors have aborted the simulation
+					return
+				case <-com.interrupt:
+					// Interrupt received
+					<-com.waitForInterrupt
+					return
+				}
 			case <-com.stop:
 				// Normal simulation exit
 				return
@@ -214,78 +273,8 @@ func (com *Communication) Communicate() {
 				<-com.waitForInterrupt
 				return
 			}
-		case <-com.stop:
-			// Normal simulation exit
-			return
-		case <-com.fail:
-			// All actors have aborted the simulation
-			return
-		case <-com.interrupt:
-			// Interrupt received
-			<-com.waitForInterrupt
-			return
 		}
 	}
-}
-
-// CommunicateTxCurve generates tx and controls the mining according
-// to the input block height vs tx count curve
-func (com *Communication) CommunicateTxCurve(txCurve []*Row, miner *Miner) {
-	defer com.wg.Done()
-
-	for _, row := range txCurve {
-		select {
-		case <-com.start:
-			// disable mining until the required no. of tx are in mempool
-			if err := miner.client.SetGenerate(false, 0); err != nil {
-				log.Printf("Cannot call setgenerate: %v", err)
-				return
-			}
-			// each address sent to com.downstream generates 1 tx
-			for i := 0; i < row.v; i++ {
-				select {
-				case addr := <-com.upstream:
-					select {
-					case com.downstream <- addr:
-					case <-com.stop:
-						return
-					case <-com.interrupt:
-						// Interrupt received
-						<-com.waitForInterrupt
-						return
-					}
-				}
-			}
-			for i := 0; i < row.v; i++ {
-				// block until either tx pool gets accepted by miner
-				// or we receive an error from the actors
-				select {
-				case <-com.txpool:
-				case err := <-com.txErrChan:
-					log.Printf("Tx error: %v", err)
-					return
-				case <-com.interrupt:
-					// Interrupt received
-					<-com.waitForInterrupt
-					return
-				}
-			}
-			// mine the above tx in the next block
-			if err := miner.client.SetGenerate(true, 1); err != nil {
-				log.Printf("Cannot call setgenerate: %v", err)
-				return
-			}
-		case <-com.stop:
-			return
-		case <-com.interrupt:
-			// Interrupt received
-			<-com.waitForInterrupt
-			return
-		}
-	}
-	// done with the curve, so stop the simulation
-	close(com.stop)
-	return
 }
 
 // Shutdown shuts down the simulation by killing the mining and the

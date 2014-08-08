@@ -68,6 +68,8 @@ func NewActor(chain *ChainServer, port uint16) (*Actor, error) {
 	return &a, nil
 }
 
+var spendAfter = make(chan struct{})
+
 // Start creates the command to execute a wallet process and starts the
 // command in the background, attaching the command's stderr and stdout
 // to the passed writers. Nil writers may be used to discard output.
@@ -93,7 +95,6 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 
 	// Starting amount at 50 BTC
 	amount := btcutil.Amount(50 * btcutil.SatoshiPerBitcoin)
-	spendAfter := make(chan struct{})
 	start := true
 	connected := make(chan struct{})
 	var firstConn bool
@@ -131,7 +132,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 		OnAccountBalance: func(account string, balance btcutil.Amount, confirmed bool) {
 			// Block actors at start until coinbase matures (equals or is more than 50 BTC).
 			if balance >= amount && start {
-				spendAfter <- struct{}{}
+				close(spendAfter)
 				start = false
 			}
 		},
