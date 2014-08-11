@@ -19,6 +19,7 @@ import (
 	"github.com/conformal/btcjson"
 	rpc "github.com/conformal/btcrpcclient"
 	"github.com/conformal/btcutil"
+	"github.com/conformal/btcwire"
 )
 
 // minFee is the minimum tx fee that can be paid
@@ -231,6 +232,21 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 		for {
 			select {
 			case tx := <-utxo:
+				// Lock utxo to prevent double spends
+				hash, err := btcwire.NewShaHashFromStr(tx.TxId)
+				if err != nil {
+					log.Printf("%s: Cannot get sha hash: %v", rpcConf.Host, err)
+					a.txErrChan <- err
+					continue
+				}
+				op := btcwire.NewOutPoint(hash, tx.Vout)
+				ops := []*btcwire.OutPoint{op}
+				err = a.client.LockUnspent(false, ops)
+				if err != nil {
+					log.Printf("%s: Cannot lock utxo: %v", rpcConf.Host, err)
+					a.txErrChan <- err
+					continue
+				}
 				// Create a raw transaction
 				inputs := []btcjson.TransactionInput{{tx.TxId, tx.Vout}}
 				amt, err := btcutil.NewAmount(tx.Amount)
