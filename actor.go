@@ -19,10 +19,14 @@ import (
 	"github.com/conformal/btcjson"
 	rpc "github.com/conformal/btcrpcclient"
 	"github.com/conformal/btcutil"
+	"github.com/conformal/btcwire"
+	"github.com/conformal/btcws"
 )
 
 // minFee is the minimum tx fee that can be paid
 const minFee btcutil.Amount = 1e4 // 0.0001 BTC
+
+var outPoints = make(map[btcwire.OutPoint]struct{})
 
 // Actor describes an actor on the simulation network.  Each actor runs
 // independantly without external input to decide it's behavior.
@@ -135,6 +139,10 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 				start = false
 			}
 		},
+		OnRedeemingTx: func(transaction *btcutil.Tx, details *btcws.BlockDetails) {
+			op := btcwire.NewOutPoint(transaction.Sha(), uint32(transaction.Index()))
+			outPoints[*op] = struct{}{}
+		},
 	}
 
 	// The RPC client will not wait for the RPC server to start up, so
@@ -219,96 +227,69 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 		}
 	}()
 
-	// utxo is used to transfer utxo results from the main actor goroutine to
-	// the goroutine responsible for creating and sending raw transactions.
-	utxo := make(chan btcjson.ListUnspentResult)
+	// List unspent transactions.
+	unspent, err := a.client.ListUnspent()
+	if err != nil {
+		log.Printf("%s: Cannot list transactions: %v", rpcConf.Host, err)
+		a.errChan <- struct{}{}
+		return err
+	}
+	for _, u := range unspent {
+		hash, err := btcwire.NewShaHashFromStr(u.TxId)
+		if err != nil {
+			log.Printf("err: %v", err)
+		}
+		op := btcwire.NewOutPoint(hash, u.Vout)
+		outPoints[*op] = struct{}{}
+	}
 
 	// Start a goroutine to send transactions.
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
 
-		for {
+		for op, _ := range outPoints {
+			// Create a raw transaction
+			inputs := []btcjson.TransactionInput{{op.Hash.String(), op.Index}}
+			amt := btcutil.Amount(50 * btcutil.SatoshiPerBitcoin)
+			// provide a fee to ensure the tx gets mined
+			amt = amt - minFee
+			var addr btcutil.Address
+
 			select {
-			case tx := <-utxo:
-				// Create a raw transaction
-				inputs := []btcjson.TransactionInput{{tx.TxId, tx.Vout}}
-				amt, err := btcutil.NewAmount(tx.Amount)
-				if err != nil {
-					log.Printf("Cannot use amount: %v", err)
-					return
-				}
-				// provide a fee to ensure the tx gets mined
-				amt = amt - minFee
-				var addr btcutil.Address
-
-				select {
-				case addr = <-a.downstream:
-				case <-a.quit:
-					return
-				}
-
-				amounts := map[btcutil.Address]btcutil.Amount{addr: amt}
-				msgTx, err := a.client.CreateRawTransaction(inputs, amounts)
-				if err != nil {
-					log.Printf("%s: Cannot create raw transaction: %v", rpcConf.Host, err)
-					a.txErrChan <- err
-					continue
-				}
-				// sign it
-				msgTx, ok, err := a.client.SignRawTransaction(msgTx)
-				if err != nil {
-					log.Printf("%s: Cannot sign raw transaction: %v", rpcConf.Host, err)
-					a.txErrChan <- err
-					continue
-				}
-				if !ok {
-					log.Printf("%s: Not all inputs have been signed", rpcConf.Host)
-					a.txErrChan <- err
-					continue
-				}
-				// and finally send it.
-				if _, err := a.client.SendRawTransaction(msgTx, false); err != nil {
-					log.Printf("%s: Cannot send raw transaction: %v", rpcConf.Host, err)
-					a.txErrChan <- err
-					continue
-				}
+			case addr = <-a.downstream:
 			case <-a.quit:
 				return
 			}
+
+			amounts := map[btcutil.Address]btcutil.Amount{addr: amt}
+			msgTx, err := a.client.CreateRawTransaction(inputs, amounts)
+			if err != nil {
+				log.Printf("%s: Cannot create raw transaction: %v", rpcConf.Host, err)
+				a.txErrChan <- err
+				continue
+			}
+			// sign it
+			msgTx, ok, err := a.client.SignRawTransaction(msgTx)
+			if err != nil {
+				log.Printf("%s: Cannot sign raw transaction: %v", rpcConf.Host, err)
+				a.txErrChan <- err
+				continue
+			}
+			if !ok {
+				log.Printf("%s: Not all inputs have been signed", rpcConf.Host)
+				a.txErrChan <- err
+				continue
+			}
+			// and finally send it.
+			if _, err := a.client.SendRawTransaction(msgTx, false); err != nil {
+				log.Printf("%s: Cannot send raw transaction: %v", rpcConf.Host, err)
+				a.txErrChan <- err
+				continue
+			}
+			delete(outPoints, op)
 		}
 	}()
-
-out:
-	// List unspent transactions.
-	for {
-		unspent, err := a.client.ListUnspent()
-		if err != nil {
-			log.Printf("%s: Cannot list transactions: %v", rpcConf.Host, err)
-			a.errChan <- struct{}{}
-			return err
-		}
-
-		// Search for eligible utxos
-		for _, u := range unspent {
-			if isMatureCoinbase(&u) || isNotCoinbase(&u) {
-				select {
-				case utxo <- u:
-					// Send an eligible utxo result to the goroutine responsible
-					// for sending transactions.
-				case <-a.quit:
-					break out
-				}
-			}
-		}
-
-		// Non-blocking check of quit channel
-		select {
-		case <-a.quit:
-			break out
-		default:
-		}
-	}
 
 	return nil
 }
@@ -368,16 +349,6 @@ func (a *Actor) ForceShutdown() {
 	a.Stop()
 	a.WaitForShutdown()
 	a.Shutdown()
-}
-
-// isMatureCoinbase checks if a coinbase transaction has reached maturity
-func isMatureCoinbase(tx *btcjson.ListUnspentResult) bool {
-	return tx.Confirmations >= 100 && tx.Vout == 0
-}
-
-// isNotCoinbase checks if a utxo is not a coinbase
-func isNotCoinbase(tx *btcjson.ListUnspentResult) bool {
-	return tx.Vout > 0 && tx.Confirmations >= 0
 }
 
 type procArgs struct {
