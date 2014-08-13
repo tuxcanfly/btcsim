@@ -20,7 +20,6 @@ import (
 	rpc "github.com/conformal/btcrpcclient"
 	"github.com/conformal/btcutil"
 	"github.com/conformal/btcwire"
-	"github.com/conformal/btcws"
 )
 
 // minFee is the minimum tx fee that can be paid
@@ -284,6 +283,12 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 					a.txErrChan <- err
 					continue
 				}
+				// re-add txout to outpoints pool
+				txHash, err := msgTx.TxSha()
+				// we're creating the raw tx above with just one output
+				// so it's index will be 0
+				txOutPoint := btcwire.NewOutPoint(&txHash, 0)
+				outPoints[*txOutPoint] = struct{}{}
 			case <-a.quit:
 				return
 			}
