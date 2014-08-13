@@ -222,32 +222,34 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 		}
 	}()
 
-	// List unspent transactions.
-	unspent, err := a.client.ListUnspent()
-	if err != nil {
-		log.Printf("%s: Cannot list transactions: %v", rpcConf.Host, err)
-		a.errChan <- struct{}{}
-		return err
-	}
-	for _, u := range unspent {
-		hash, err := btcwire.NewShaHashFromStr(u.TxId)
-		if err != nil {
-			log.Printf("err: %v", err)
-		}
-		op := btcwire.NewOutPoint(hash, u.Vout)
-		outPoints[*op] = struct{}{}
-	}
-
 	// Start a goroutine to send transactions.
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
 
+		first := true
+		var op btcwire.OutPoint
+
 		for {
 			select {
 			case addr := <-a.downstream:
+				if first {
+					// List unspent transactions.
+					unspent, err := a.client.ListUnspent()
+					if err != nil {
+						log.Printf("%s: Cannot list transactions: %v", rpcConf.Host, err)
+					}
+					for _, u := range unspent {
+						hash, err := btcwire.NewShaHashFromStr(u.TxId)
+						if err != nil {
+							log.Printf("err: %v", err)
+						}
+						op := btcwire.NewOutPoint(hash, u.Vout)
+						outPoints[*op] = struct{}{}
+					}
+					first = false
+				}
 				// Fetch any available outpoint
-				var op btcwire.OutPoint
 				for op = range outPoints {
 					break
 				}
