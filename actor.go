@@ -139,10 +139,6 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 				start = false
 			}
 		},
-		OnRedeemingTx: func(transaction *btcutil.Tx, details *btcws.BlockDetails) {
-			op := btcwire.NewOutPoint(transaction.Sha(), uint32(transaction.Index()))
-			outPoints[*op] = struct{}{}
-		},
 	}
 
 	// The RPC client will not wait for the RPC server to start up, so
@@ -248,46 +244,49 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 	go func() {
 		defer a.wg.Done()
 
-		for op, _ := range outPoints {
-			// Create a raw transaction
-			inputs := []btcjson.TransactionInput{{op.Hash.String(), op.Index}}
-			amt := btcutil.Amount(50 * btcutil.SatoshiPerBitcoin)
-			// provide a fee to ensure the tx gets mined
-			amt = amt - minFee
-			var addr btcutil.Address
-
+		for {
 			select {
-			case addr = <-a.downstream:
+			case addr := <-a.downstream:
+				// Fetch any available outpoint
+				var op btcwire.OutPoint
+				for op = range outPoints {
+					break
+				}
+				delete(outPoints, op)
+				// Create a raw transaction
+				inputs := []btcjson.TransactionInput{{op.Hash.String(), op.Index}}
+				amt := btcutil.Amount(50 * btcutil.SatoshiPerBitcoin)
+				// provide a fee to ensure the tx gets mined
+				amt = amt - minFee
+
+				amounts := map[btcutil.Address]btcutil.Amount{addr: amt}
+				msgTx, err := a.client.CreateRawTransaction(inputs, amounts)
+				if err != nil {
+					log.Printf("%s: Cannot create raw transaction: %v", rpcConf.Host, err)
+					a.txErrChan <- err
+					continue
+				}
+				// sign it
+				msgTx, ok, err := a.client.SignRawTransaction(msgTx)
+				if err != nil {
+					log.Printf("%s: Cannot sign raw transaction: %v", rpcConf.Host, err)
+					a.txErrChan <- err
+					continue
+				}
+				if !ok {
+					log.Printf("%s: Not all inputs have been signed", rpcConf.Host)
+					a.txErrChan <- err
+					continue
+				}
+				// and finally send it.
+				if _, err := a.client.SendRawTransaction(msgTx, false); err != nil {
+					log.Printf("%s: Cannot send raw transaction: %v", rpcConf.Host, err)
+					a.txErrChan <- err
+					continue
+				}
 			case <-a.quit:
 				return
 			}
-
-			amounts := map[btcutil.Address]btcutil.Amount{addr: amt}
-			msgTx, err := a.client.CreateRawTransaction(inputs, amounts)
-			if err != nil {
-				log.Printf("%s: Cannot create raw transaction: %v", rpcConf.Host, err)
-				a.txErrChan <- err
-				continue
-			}
-			// sign it
-			msgTx, ok, err := a.client.SignRawTransaction(msgTx)
-			if err != nil {
-				log.Printf("%s: Cannot sign raw transaction: %v", rpcConf.Host, err)
-				a.txErrChan <- err
-				continue
-			}
-			if !ok {
-				log.Printf("%s: Not all inputs have been signed", rpcConf.Host)
-				a.txErrChan <- err
-				continue
-			}
-			// and finally send it.
-			if _, err := a.client.SendRawTransaction(msgTx, false); err != nil {
-				log.Printf("%s: Cannot send raw transaction: %v", rpcConf.Host, err)
-				a.txErrChan <- err
-				continue
-			}
-			delete(outPoints, op)
 		}
 	}()
 
