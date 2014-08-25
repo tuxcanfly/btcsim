@@ -351,16 +351,6 @@ func (a *Actor) ForceShutdown() {
 	a.Shutdown()
 }
 
-// isMatureCoinbase checks if a coinbase transaction has reached maturity
-func isMatureCoinbase(tx *btcjson.ListUnspentResult) bool {
-	return tx.Confirmations >= 100 && tx.Vout == 0
-}
-
-// isNotCoinbase checks if a utxo is not a coinbase
-func isNotCoinbase(tx *btcjson.ListUnspentResult) bool {
-	return tx.Vout > 0 && tx.Confirmations >= 0
-}
-
 type procArgs struct {
 	chainSvr         ChainServer
 	dir              string
