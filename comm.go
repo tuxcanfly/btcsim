@@ -247,8 +247,14 @@ func (com *Communication) poolUtxos(client *rpc.Client, actors []*Actor) {
 						continue next
 					}
 					txout := com.getUtxo(tx, vout, uint32(n))
-					// add utxo to actor's pool
-					actor.utxoQueue.enqueue <- txout
+					// to be usable, the utxo amount should be
+					// have atleast minFee in balance after deducting
+					// the fee, so ensure that it is atleast twice the
+					// amount as minFee
+					if txout.Amount > 2*minFee {
+						// if it's usable, add utxo to actor's pool
+						actor.utxoQueue.enqueue <- txout
+					}
 				}
 			}
 			// allow Communicate to sync with the processed block
