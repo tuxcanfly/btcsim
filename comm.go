@@ -253,7 +253,10 @@ func (com *Communication) poolUtxos(client *rpc.Client, actors []*Actor) {
 					// amount as minFee
 					if txout.Amount > 2*minFee {
 						// if it's usable, add utxo to actor's pool
-						actor.utxoQueue.enqueue <- txout
+						select {
+						case actor.utxoQueue.enqueue <- txout:
+						case <-com.exit:
+						}
 					}
 				}
 			}
