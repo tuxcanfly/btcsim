@@ -54,25 +54,24 @@ var (
 
 var (
 	// AppDataDir is the path to the working directory set using btcutil.AppDataDir
-	AppDataDir string
+	AppDataDir = btcutil.AppDataDir("btcsim", false)
+
 	// CertFile is the path to the certificate file of a cert-key pair used for RPC connections
-	CertFile string
+	CertFile = filepath.Join(AppDataDir, "rpc.cert")
+
 	// KeyFile is the path to the key file of a cert-key pair used for RPC connections
-	KeyFile string
+	KeyFile = filepath.Join(AppDataDir, "rpc.key")
 )
 
 func init() {
 	flag.Parse()
 
-	AppDataDir = btcutil.AppDataDir("btcsim", false)
+	// make sure the app data dir exists
 	if !fileExists(AppDataDir) {
 		if err := os.Mkdir(AppDataDir, 0700); err != nil {
 			log.Fatalf("Cannot create app data dir: %v", err)
 		}
 	}
-	CertFile = filepath.Join(AppDataDir, "rpc.cert")
-	KeyFile = filepath.Join(AppDataDir, "rpc.key")
-
 }
 
 func main() {

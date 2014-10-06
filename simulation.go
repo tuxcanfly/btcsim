@@ -12,8 +12,11 @@ import (
 	"github.com/conformal/btcwire"
 )
 
-// ErrInvalidCertPair is raised in case of an error in reading the default cert pair
-var ErrInvalidCertPair = errors.New("error reading cert pair")
+// ErrMissingCert is raised in case the cert of a cert pair is missing
+var ErrMissingCert = errors.New("could not find TLS certificate pair cert file (rpc.cert)")
+
+// ErrMissingKey is raised in case the key of a cert pair is missing
+var ErrMissingKey = errors.New("could not find TLS certificate pair key file (rpc.key)")
 
 const (
 	// SimRows is the number of rows in the default curve
@@ -105,10 +108,10 @@ func (s *Simulation) Start() error {
 	switch {
 	case haveCert && !haveKey:
 		log.Printf("Missing key: '%s', delete cert: '%s' to auto-generate a new cert pair", KeyFile, CertFile)
-		return ErrInvalidCertPair
+		return ErrMissingKey
 	case !haveCert && haveKey:
 		log.Printf("Missing cert: '%s', delete key: '%s' to auto-generate a new cert pair", CertFile, KeyFile)
-		return ErrInvalidCertPair
+		return ErrMissingCert
 	case !haveCert:
 		// generate new cert pair if both cert and key are missing
 		err := genCertPair(CertFile, KeyFile)

@@ -37,7 +37,7 @@ type Node struct {
 	handlers *rpc.NotificationHandlers
 	cmd      *exec.Cmd
 	client   *rpc.Client
-	pidFile  *os.File
+	pidFile  string
 }
 
 // NewNodeFromArgs starts a new node using the args provided, sets the handlers
@@ -47,11 +47,6 @@ func NewNodeFromArgs(args Args, handlers *rpc.NotificationHandlers, w io.Writer)
 		Args:     args,
 		handlers: handlers,
 	}
-	pidFile, err := os.Create(filepath.Join(AppDataDir, fmt.Sprintf("%s.pid", n)))
-	if err != nil {
-		return &n, err
-	}
-	n.pidFile = pidFile
 	cmd := n.Command()
 	n.cmd = cmd
 	if w != nil {
@@ -62,12 +57,24 @@ func NewNodeFromArgs(args Args, handlers *rpc.NotificationHandlers, w io.Writer)
 }
 
 // Start stats the node command
+// It writes a pidfile to AppDataDir with the name of the process
+// which can be used to terminate the process in case of a hang or panic
 func (n *Node) Start() error {
-	err := n.cmd.Start()
+	if err := n.cmd.Start(); err != nil {
+		return err
+	}
+	pid, err := os.Create(filepath.Join(AppDataDir,
+		fmt.Sprintf("%s.pid", n.Args)))
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(n.pidFile, "%d\n", n.cmd.Process.Pid)
+	n.pidFile = pid.Name()
+	if _, err = fmt.Fprintf(pid, "%d\n", n.cmd.Process.Pid); err != nil {
+		return err
+	}
+	if err := pid.Close(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -111,8 +118,10 @@ func (n *Node) Stop() error {
 
 // Cleanup cleanups process and args files
 func (n *Node) Cleanup() error {
-	if err := os.Remove(n.pidFile.Name()); err != nil {
-		log.Printf("Cannot remove file %s: %v", n.pidFile.Name(), err)
+	if n.pidFile != "" {
+		if err := os.Remove(n.pidFile); err != nil {
+			log.Printf("Cannot remove file %s: %v", n.pidFile, err)
+		}
 	}
 	return n.Args.Cleanup()
 }
