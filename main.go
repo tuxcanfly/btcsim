@@ -53,7 +53,12 @@ var (
 )
 
 var (
-	AppDataDir, CertFile, KeyFile string
+	// AppDataDir is the path to the working directory set using btcutil.AppDataDir
+	AppDataDir string
+	// CertFile is the path to the certificate file of a cert-key pair used for RPC connections
+	CertFile string
+	// KeyFile is the path to the key file of a cert-key pair used for RPC connections
+	KeyFile string
 )
 
 func init() {
