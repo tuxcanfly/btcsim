@@ -95,6 +95,7 @@ func main() {
 	simulation.readTxCurve(*txCurvePath)
 	simulation.updateFlags()
 	if err := simulation.Start(); err != nil {
+		log.Printf("Cannot start simulation: %v", err)
 		os.Exit(1)
 	}
 }

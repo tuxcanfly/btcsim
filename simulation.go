@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"fmt"
 	"log"
 	"math"
 	"os"
@@ -12,11 +12,12 @@ import (
 	"github.com/conformal/btcwire"
 )
 
-// ErrMissingCert is raised in case the cert of a cert pair is missing
-var ErrMissingCert = errors.New("could not find TLS certificate pair cert file (rpc.cert)")
+// MissingCertPairFile is raised when one of the cert pair files is missing
+type MissingCertPairFile string
 
-// ErrMissingKey is raised in case the key of a cert pair is missing
-var ErrMissingKey = errors.New("could not find TLS certificate pair key file (rpc.key)")
+func (m MissingCertPairFile) Error() string {
+	return fmt.Sprintf("could not find TLS certificate pair file: %#v", m)
+}
 
 const (
 	// SimRows is the number of rows in the default curve
@@ -107,11 +108,9 @@ func (s *Simulation) Start() error {
 	haveKey := fileExists(KeyFile)
 	switch {
 	case haveCert && !haveKey:
-		log.Printf("Missing key: '%s', delete cert: '%s' to auto-generate a new cert pair", KeyFile, CertFile)
-		return ErrMissingKey
+		return MissingCertPairFile(KeyFile)
 	case !haveCert && haveKey:
-		log.Printf("Missing cert: '%s', delete key: '%s' to auto-generate a new cert pair", CertFile, KeyFile)
-		return ErrMissingCert
+		return MissingCertPairFile(CertFile)
 	case !haveCert:
 		// generate new cert pair if both cert and key are missing
 		err := genCertPair(CertFile, KeyFile)
