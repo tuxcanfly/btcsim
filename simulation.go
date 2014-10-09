@@ -16,10 +16,10 @@ const (
 	SimRows = 10
 
 	// SimUtxoCount is the starting number of utxos in the default curve
-	SimUtxoCount = 2000
+	SimUtxoCount = 12000
 
 	// SimTxCount is the starting number of tx in the default curve
-	SimTxCount = 1000
+	SimTxCount = 10000
 )
 
 // Simulation contains the data required to run a simulation
@@ -116,6 +116,7 @@ func (s *Simulation) Start() error {
 		log.Printf("Cannot create node args: %v", err)
 		return err
 	}
+	args.Extra = append(args.Extra, "--cpuprofile=node.prof")
 	logFile, err := getLogFile(args.prefix)
 	if err != nil {
 		log.Printf("Cannot get log file, logging disabled: %v", err)

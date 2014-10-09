@@ -73,6 +73,7 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 			args.Extra = append(args.Extra, "--miningaddr="+addr.EncodeAddress())
 		}
 	}
+	args.Extra = append(args.Extra, "--cpuprofile=miner.prof")
 
 	logFile, err := getLogFile(args.prefix)
 	if err != nil {
