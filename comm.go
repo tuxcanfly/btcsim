@@ -46,7 +46,6 @@ type Communication struct {
 	blockTxCount  chan int
 	exit          chan struct{}
 	errChan       chan struct{}
-	height        chan int32
 	split         chan int
 	txpool        chan struct{}
 	coinbaseQueue chan *btcutil.Tx
@@ -61,7 +60,6 @@ func NewCommunication() *Communication {
 		downstream:    make(chan btcutil.Address, *numActors),
 		timeReceived:  make(chan time.Time, *numActors),
 		blockTxCount:  make(chan int, *numActors),
-		height:        make(chan int32),
 		split:         make(chan int),
 		txpool:        make(chan struct{}),
 		coinbaseQueue: make(chan *btcutil.Tx, btcchain.CoinbaseMaturity),
@@ -115,7 +113,7 @@ func (com *Communication) Start(actors []*Actor, node *Node, txCurve map[int32]*
 	}
 
 	// Start mining.
-	miner, err := NewMiner(miningAddrs, com.exit, com.height, com.txpool)
+	miner, err := NewMiner(miningAddrs, com.exit, com.txpool)
 	if err != nil {
 		close(com.exit)
 		close(tpsChan)
@@ -410,18 +408,11 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 
 	for {
 		select {
-		case h := <-com.height:
+		case b := <-com.blockQueue.processed:
 
 			// disable mining until the required no. of tx are in mempool
 			if err := miner.StopMining(); err != nil {
 				close(com.exit)
-				return
-			}
-
-			// wait until this block is processed
-			select {
-			case <-com.blockQueue.processed:
-			case <-com.exit:
 				return
 			}
 
@@ -461,7 +452,7 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 
 			// in case the next row doesn't exist, we initialize the required no of utxos to zero
 			// so we keep the utxoCount same as current count
-			next, ok := txCurve[h+1]
+			next, ok := txCurve[b.height+1]
 			if !ok {
 				next = &Row{}
 				next.utxoCount = utxoCount
@@ -475,7 +466,7 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 
 			// in case this row doesn't exist, we initialize the required no of tx to reqUtxoCount
 			// i.e one tx per utxo required
-			row, ok := txCurve[h]
+			row, ok := txCurve[b.height]
 			if !ok {
 				row = &Row{}
 				row.txCount = reqUtxoCount

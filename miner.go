@@ -22,7 +22,7 @@ type Miner struct {
 // NewMiner starts a cpu-mining enabled btcd instane and returns an rpc client
 // to control it.
 func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
-	height chan<- int32, txpool chan<- struct{}) (*Miner, error) {
+	txpool chan<- struct{}) (*Miner, error) {
 
 	ntfnHandlers := &rpc.NotificationHandlers{
 		// When a block higher than maxBlocks connects to the chain,
@@ -33,9 +33,7 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 				close(exit)
 			}
 			if h >= int32(*matureBlock)-1 {
-				if height != nil {
-					height <- h
-				}
+				fmt.Printf("\n")
 			} else {
 				fmt.Printf("\r%d/%d", h, *matureBlock)
 			}
