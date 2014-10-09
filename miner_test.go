@@ -38,25 +38,20 @@ func TestNewMiner(t *testing.T) {
 			t.Errorf("actor.Start error: %v", err)
 		}
 	}()
-	addrs := make(chan btcutil.Address)
+	miningaddrs := make([]btcutil.Address, 1)
 	go func() {
-		for addr := range actor.miningAddr {
-			addrs <- addr
+		addr := <-actor.miningAddr
+		miningaddrs = append(miningaddrs, addr)
+		exit := make(chan struct{})
+		height := make(chan int32)
+		txpool := make(chan struct{})
+		miner, err := NewMiner(miningaddrs, exit, height, txpool)
+		if err != nil {
+			t.Errorf("NewMiner error: %v", err)
 		}
+		defer miner.Shutdown()
 	}()
 	if err := actor.Start(nil, nil, fakeCom); err != nil {
 		t.Errorf("actor.Start error: %v", err)
 	}
-	miningaddrs := make([]btcutil.Address, 1)
-	for addr := range addrs {
-		miningaddrs = append(miningaddrs, addr)
-	}
-	exit := make(chan struct{})
-	height := make(chan int32)
-	txpool := make(chan struct{})
-	miner, err := NewMiner(miningaddrs, exit, height, txpool)
-	if err != nil {
-		t.Errorf("NewMiner error: %v", err)
-	}
-	defer miner.Shutdown()
 }
