@@ -115,7 +115,7 @@ func (com *Communication) Start(actors []*Actor, node *Node, txCurve map[int32]*
 	}
 
 	// Start mining.
-	miner, err := NewMiner(miningAddrs, com.exit, com.height, com.txpool)
+	miner, err := NewMiner(miningAddrs, com.exit, com.txpool)
 	if err != nil {
 		close(com.exit)
 		close(tpsChan)
@@ -263,7 +263,16 @@ func (com *Communication) poolUtxos(client *rpc.Client, actors []*Actor) {
 				}
 			}
 			// allow Communicate to sync with the processed block
-			if b.height >= int32(*matureBlock)-1 {
+			// we start at startBlock-1 so we can get the min no of utxos
+			// required for the startBlock
+			if b.height == int32(*startBlock)-1 {
+				select {
+				case com.blockQueue.processed <- b:
+				case <-com.exit:
+					return
+				}
+			}
+			if b.height >= int32(*startBlock) {
 				var txCount, utxoCount int
 				for _, a := range actors {
 					utxoCount += len(a.utxoQueue.utxos)
@@ -272,12 +281,12 @@ func (com *Communication) poolUtxos(client *rpc.Client, actors []*Actor) {
 				log.Printf("Block %s (height %d) attached with %d transactions", b.hash, b.height, txCount)
 				log.Printf("%d transaction outputs available to spend", utxoCount)
 				select {
-				case com.blockQueue.processed <- b:
+				case com.blockTxCount <- txCount:
 				case <-com.exit:
 					return
 				}
 				select {
-				case com.blockTxCount <- txCount:
+				case com.blockQueue.processed <- b:
 				case <-com.exit:
 					return
 				}
@@ -410,18 +419,16 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 
 	for {
 		select {
-		case h := <-com.height:
+		case b := <-com.blockQueue.processed:
 
-			// disable mining until the required no. of tx are in mempool
-			if err := miner.StopMining(); err != nil {
+			if b.height >= int32(*stopBlock) {
 				close(com.exit)
 				return
 			}
 
-			// wait until this block is processed
-			select {
-			case <-com.blockQueue.processed:
-			case <-com.exit:
+			// disable mining until the required no. of tx are in mempool
+			if err := miner.StopMining(); err != nil {
+				close(com.exit)
 				return
 			}
 
@@ -461,7 +468,7 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 
 			// in case the next row doesn't exist, we initialize the required no of utxos to zero
 			// so we keep the utxoCount same as current count
-			next, ok := txCurve[h+1]
+			next, ok := txCurve[b.height+2]
 			if !ok {
 				next = &Row{}
 				next.utxoCount = utxoCount
@@ -475,7 +482,7 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 
 			// in case this row doesn't exist, we initialize the required no of tx to reqUtxoCount
 			// i.e one tx per utxo required
-			row, ok := txCurve[h]
+			row, ok := txCurve[b.height+1]
 			if !ok {
 				row = &Row{}
 				row.txCount = reqUtxoCount

@@ -17,27 +17,28 @@ import (
 // and kill a cpu-mining btcd instance.
 type Miner struct {
 	*Node
+	*blockQueue
 }
 
 // NewMiner starts a cpu-mining enabled btcd instane and returns an rpc client
 // to control it.
 func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
-	height chan<- int32, txpool chan<- struct{}) (*Miner, error) {
+	txpool chan<- struct{}) (*Miner, error) {
 
+	blockQueue := &blockQueue{
+		enqueue:   make(chan *Block),
+		dequeue:   make(chan *Block),
+		processed: make(chan *Block),
+	}
 	ntfnHandlers := &rpc.NotificationHandlers{
-		// When a block higher than maxBlocks connects to the chain,
-		// send a signal to stop actors. This is used so main can break from
-		// select and call actor.Stop to stop actors.
-		OnBlockConnected: func(hash *btcwire.ShaHash, h int32) {
-			if h > int32(*maxBlocks) {
-				close(exit)
+		OnBlockConnected: func(hash *btcwire.ShaHash, height int32) {
+			block := &Block{
+				hash:   hash,
+				height: height,
 			}
-			if h >= int32(*matureBlock)-1 {
-				if height != nil {
-					height <- h
-				}
-			} else {
-				fmt.Printf("\r%d/%d", h, *matureBlock)
+			select {
+			case blockQueue.enqueue <- block:
+			case <-exit:
 			}
 		},
 		// Send a signal that a tx has been accepted into the mempool. Based on
@@ -79,10 +80,14 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 		log.Printf("Cannot get log file, logging disabled: %v", err)
 	}
 	node, err := NewNodeFromArgs(args, ntfnHandlers, logFile)
-
 	miner := &Miner{
-		Node: node,
+		Node:       node,
+		blockQueue: blockQueue,
 	}
+
+	go miner.queueBlocks()
+	go miner.processBlocks()
+
 	if err := node.Start(); err != nil {
 		log.Printf("%s: Cannot start mining node: %v", miner, err)
 		return nil, err
@@ -109,8 +114,72 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 		return miner, err
 	}
 
-	log.Printf("%s: Generating %v blocks...", miner, *matureBlock)
+	log.Printf("%s: Generating %v blocks...", miner, *startBlock)
 	return miner, nil
+}
+
+func (m *Miner) processBlocks() {
+	for {
+		select {
+		case b, ok := <-m.blockQueue.dequeue:
+			if !ok {
+				return
+			}
+			// stop mining at *startBlock-1
+			if b.height >= int32(*startBlock)-1 {
+				if err := m.StopMining(); err != nil {
+					log.Printf("%s: Cannot stop mining: %v", m, err)
+					return
+				}
+			} else {
+				fmt.Printf("\r%d/%d", b.height, *startBlock)
+			}
+		}
+	}
+}
+
+// queueBlocks queues blocks in the order they are received
+func (m *Miner) queueBlocks() {
+
+	var blocks []*Block
+	enqueue := m.blockQueue.enqueue
+	var dequeue chan *Block
+	var next *Block
+out:
+	for {
+		select {
+		case n, ok := <-enqueue:
+			if !ok {
+				// If no blocks are queued for handling,
+				// the queue is finished.
+				if len(blocks) == 0 {
+					break out
+				}
+				// nil channel so no more reads can occur.
+				enqueue = nil
+				continue
+			}
+			if len(blocks) == 0 {
+				next = n
+				dequeue = m.blockQueue.dequeue
+			}
+			blocks = append(blocks, n)
+		case dequeue <- next:
+			blocks[0] = nil
+			blocks = blocks[1:]
+			if len(blocks) != 0 {
+				next = blocks[0]
+			} else {
+				// If no more blocks can be enqueued, the
+				// queue is finished.
+				if enqueue == nil {
+					break out
+				}
+				dequeue = nil
+			}
+		}
+	}
+	close(m.blockQueue.dequeue)
 }
 
 // StartMining sets the cpu miner to mine coins
