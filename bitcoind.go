@@ -170,6 +170,7 @@ func (a *bitcoindArgs) RPCConnConfig() rpc.ConnConfig {
 		Pass:                 a.RPCPass,
 		DisableAutoReconnect: true,
 		HttpPostMode:         true,
+		DisableTLS:           true,
 	}
 }
 

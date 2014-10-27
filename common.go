@@ -85,10 +85,13 @@ func (n *Node) Connect() error {
 	var err error
 
 	rpcConf := n.RPCConnConfig()
+	if client, err = rpc.New(&rpcConf, n.handlers); err != nil {
+		return err
+	}
 
 	for i := 0; i < *maxConnRetries; i++ {
-		if client, err = rpc.New(&rpcConf, n.handlers); err != nil {
-			time.Sleep(time.Duration(i) * 50 * time.Millisecond)
+		if _, err = client.GetInfo(); err != nil {
+			time.Sleep(time.Second)
 			continue
 		}
 		break

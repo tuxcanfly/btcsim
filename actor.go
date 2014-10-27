@@ -10,7 +10,6 @@ import (
 	"log"
 	"math/rand"
 	"sync"
-	"time"
 
 	"github.com/conformal/btcjson"
 	"github.com/conformal/btcutil"
@@ -80,13 +79,8 @@ func NewActor(node *Node, port uint16) (*Actor, error) {
 func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 	const timeoutSecs int64 = 3600 * 24
 
-	// Wait for wallet sync
-	for i := 0; i < *maxConnRetries; i++ {
-		if _, err := a.client.GetBalance(""); err != nil {
-			time.Sleep(time.Duration(i) * 50 * time.Millisecond)
-			continue
-		}
-		break
+	if err := a.Connect(); err != nil {
+		return err
 	}
 
 	// Create wallet addresses and unlock wallet.

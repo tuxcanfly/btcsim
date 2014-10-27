@@ -125,9 +125,6 @@ func (com *Communication) Start(actors []*Actor, node *Node, txCurve map[int32]*
 		return
 	}
 
-	// Add mining node listen interface as a node
-	node.client.AddNode("localhost:18550", rpc.ANAdd)
-
 	// Start a goroutine to estimate tps
 	com.wg.Add(1)
 	go com.estimateTps(tpsChan, txCurve)

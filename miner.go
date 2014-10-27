@@ -43,6 +43,8 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 			args.Extra = append(args.Extra, "--miningaddr="+addr.EncodeAddress())
 		}
 	}
+	// Add node as peer for mining
+	args.Extra = append(args.Extra, "--addnode=127.0.0.1:18555")
 
 	logFile, err := getLogFile(args.prefix)
 	if err != nil {
