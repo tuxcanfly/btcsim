@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"log"
 
-	rpc "github.com/conformal/btcrpcclient"
 	"github.com/conformal/btcutil"
-	"github.com/conformal/btcwire"
 )
 
 // Miner holds all the core features required to register, run, control,
@@ -24,43 +22,18 @@ type Miner struct {
 func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 	height chan<- int32, txpool chan<- struct{}) (*Miner, error) {
 
-	ntfnHandlers := &rpc.NotificationHandlers{
-		// When a block higher than stopBlock connects to the chain,
-		// send a signal to stop actors. This is used so main can break from
-		// select and call actor.Stop to stop actors.
-		OnBlockConnected: func(hash *btcwire.ShaHash, h int32) {
-			if h >= int32(*startBlock)-1 {
-				if height != nil {
-					height <- h
-				}
-			} else {
-				fmt.Printf("\r%d/%d", h, *startBlock)
-			}
-		},
-		// Send a signal that a tx has been accepted into the mempool. Based on
-		// the tx curve, the receiver will need to wait until required no of tx
-		// are filled up in the mempool
-		OnTxAccepted: func(hash *btcwire.ShaHash, amount btcutil.Amount) {
-			if txpool != nil {
-				// this will not be blocked because we're creating only
-				// required no of tx and receiving all of them
-				txpool <- struct{}{}
-			}
-		},
-	}
-
 	log.Println("Starting miner on simnet...")
-	args, err := newBtcdArgs("miner")
+	args, err := newBitcoindArgs("miner")
 	if err != nil {
 		return nil, err
 	}
 
 	// set miner args - it listens on a different port
 	// because a node is already running on the default port
-	args.Listen = "127.0.0.1:18550"
-	args.RPCListen = "127.0.0.1:18551"
-	// need to log mining details, so set debuglevel
-	args.DebugLevel = "MINR=trace"
+	args.Listen = "127.0.0.1"
+	args.Port = "18550"
+	args.RPCListen = "127.0.0.1"
+	args.RPCPort = "18551"
 	// if passed, set blockmaxsize to allow mining large blocks
 	args.Extra = []string{fmt.Sprintf("--blockmaxsize=%d", *maxBlockSize)}
 	// set the actors' mining addresses
@@ -75,7 +48,7 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 	if err != nil {
 		log.Printf("Cannot get log file, logging disabled: %v", err)
 	}
-	node, err := NewNodeFromArgs(args, ntfnHandlers, logFile)
+	node, err := NewNodeFromArgs(args, nil, logFile)
 
 	miner := &Miner{
 		Node: node,
@@ -89,20 +62,8 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 		return nil, err
 	}
 
-	// Register for transaction notifications
-	if err := miner.client.NotifyNewTransactions(false); err != nil {
-		log.Printf("%s: Cannot register for transactions notifications: %v", miner, err)
-		return miner, err
-	}
-
 	// Use just one core for mining.
 	if err := miner.StartMining(); err != nil {
-		return miner, err
-	}
-
-	// Register for block notifications.
-	if err := miner.client.NotifyBlocks(); err != nil {
-		log.Printf("%s: Cannot register for block notifications: %v", miner, err)
 		return miner, err
 	}
 

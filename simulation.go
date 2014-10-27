@@ -5,11 +5,6 @@ import (
 	"log"
 	"math"
 	"os"
-	"time"
-
-	rpc "github.com/conformal/btcrpcclient"
-	"github.com/conformal/btcutil"
-	"github.com/conformal/btcwire"
 )
 
 // MissingCertPairFile is raised when one of the cert pair files is missing
@@ -120,24 +115,8 @@ func (s *Simulation) Start() error {
 		}
 	}
 
-	ntfnHandlers := &rpc.NotificationHandlers{
-		OnBlockConnected: func(hash *btcwire.ShaHash, height int32) {
-			block := &Block{
-				hash:   hash,
-				height: height,
-			}
-			select {
-			case s.com.blockQueue.enqueue <- block:
-			case <-s.com.exit:
-			}
-		},
-		OnTxAccepted: func(hash *btcwire.ShaHash, amount btcutil.Amount) {
-			s.com.timeReceived <- time.Now()
-		},
-	}
-
 	log.Println("Starting node on simnet...")
-	args, err := newBtcdArgs("node")
+	args, err := newBitcoindArgs("node")
 	if err != nil {
 		log.Printf("Cannot create node args: %v", err)
 		return err
@@ -146,7 +125,7 @@ func (s *Simulation) Start() error {
 	if err != nil {
 		log.Printf("Cannot get log file, logging disabled: %v", err)
 	}
-	node, err := NewNodeFromArgs(args, ntfnHandlers, logFile)
+	node, err := NewNodeFromArgs(args, nil, logFile)
 	if err != nil {
 		log.Printf("%s: Cannot create node: %v", node, err)
 		return err
@@ -157,18 +136,6 @@ func (s *Simulation) Start() error {
 	}
 	if err := node.Connect(); err != nil {
 		log.Printf("%s: Cannot connect to node: %v", node, err)
-		return err
-	}
-
-	// Register for block notifications.
-	if err := node.client.NotifyBlocks(); err != nil {
-		log.Printf("%s: Cannot register for block notifications: %v", node, err)
-		return err
-	}
-
-	// Register for transaction notifications
-	if err := node.client.NotifyNewTransactions(false); err != nil {
-		log.Printf("%s: Cannot register for transactions notifications: %v", node, err)
 		return err
 	}
 

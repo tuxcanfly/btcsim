@@ -5,7 +5,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/conformal/btcjson"
-	rpc "github.com/conformal/btcrpcclient"
 	"github.com/conformal/btcutil"
 	"github.com/conformal/btcwire"
 )
@@ -54,28 +52,8 @@ type TxOut struct {
 // to the btcd node server specified by node, and listening for simulator
 // websocket connections on the specified port.
 func NewActor(node *Node, port uint16) (*Actor, error) {
-	// Please don't run this as root.
-	if port < 1024 {
-		return nil, errors.New("invalid actor port")
-	}
-
-	// Set btcwallet node args
-	args, err := newBtcwalletArgs(port, node.Args.(*btcdArgs))
-	if err != nil {
-		return nil, err
-	}
-
-	logFile, err := getLogFile(args.prefix)
-	if err != nil {
-		log.Printf("Cannot get log file, logging disabled: %v", err)
-	}
-	btcwallet, err := NewNodeFromArgs(args, nil, logFile)
-	if err != nil {
-		return nil, err
-	}
-
 	a := Actor{
-		Node:             btcwallet,
+		Node:             node,
 		quit:             make(chan struct{}),
 		ownedAddresses:   make([]btcutil.Address, *maxAddresses),
 		miningAddr:       make(chan btcutil.Address),
@@ -100,40 +78,7 @@ func NewActor(node *Node, port uint16) (*Actor, error) {
 // be created, the wallet process is killed and the actor directory
 // removed.
 func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
-	connected := make(chan struct{})
-	var firstConn bool
 	const timeoutSecs int64 = 3600 * 24
-
-	if err := a.Node.Start(); err != nil {
-		a.Shutdown()
-		com.errChan <- struct{}{}
-		return err
-	}
-
-	ntfnHandlers := &rpc.NotificationHandlers{
-		OnBtcdConnected: func(conn bool) {
-			if conn && !firstConn {
-				firstConn = true
-				connected <- struct{}{}
-			}
-		},
-	}
-	a.handlers = ntfnHandlers
-
-	if err := a.Connect(); err != nil {
-		a.Shutdown()
-		com.errChan <- struct{}{}
-		return err
-	}
-
-	// Wait for btcd to connect
-	<-connected
-
-	// Create the wallet.
-	if err := a.client.CreateEncryptedWallet(a.walletPassphrase); err != nil {
-		com.errChan <- struct{}{}
-		return err
-	}
 
 	// Wait for wallet sync
 	for i := 0; i < *maxConnRetries; i++ {
@@ -157,12 +102,6 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 		a.ownedAddresses[i] = addr
 	}
 	fmt.Printf("\n")
-
-	if err := a.client.WalletPassphrase(a.walletPassphrase, timeoutSecs); err != nil {
-		log.Printf("%s: Cannot unlock wallet: %v", a, err)
-		com.errChan <- struct{}{}
-		return err
-	}
 
 	// Send a random address that will be used by the cpu miner.
 	a.miningAddr <- a.ownedAddresses[rand.Int()%len(a.ownedAddresses)]
