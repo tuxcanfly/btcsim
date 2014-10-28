@@ -11,8 +11,8 @@ import (
 var (
 	// map notification events to RPC call
 	notifications = map[string]string{
-		"block": "OnBlockConnected",
-		"tx":    "OnTxAccepted",
+		"block": "BlockNotify",
+		"tx":    "WalletNotify",
 	}
 
 	// name

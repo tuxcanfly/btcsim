@@ -41,7 +41,7 @@ func (l *Listener) listen() error {
 	return nil
 }
 
-func (l *Listener) OnBlockConnected(hashStr string, ack *bool) error {
+func (l *Listener) BlockNotify(hashStr string, ack *bool) error {
 	l.height += 1
 	hash, err := btcwire.NewShaHashFromStr(hashStr)
 	if err != nil {
@@ -51,11 +51,12 @@ func (l *Listener) OnBlockConnected(hashStr string, ack *bool) error {
 	return nil
 }
 
-func (l *Listener) OnTxAccepted(hashStr string, ack *bool) error {
+func (l *Listener) WalletNotify(hashStr string, ack *bool) error {
 	hash, err := btcwire.NewShaHashFromStr(hashStr)
 	if err != nil {
 		return err
 	}
+	// tx amt is not available here, pass zero
 	l.handlers.OnTxAccepted(hash, 0)
 	return nil
 }
