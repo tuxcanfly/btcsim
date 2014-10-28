@@ -195,6 +195,9 @@ func (a *Actor) splitUtxos(split <-chan int, txpool chan<- struct{}) {
 				// set a rand start index for getting different random addrs
 				randomIndex := rand.Int() % len(a.ownedAddresses)
 				for i := 0; i <= split; i++ {
+					if amt < minFee {
+						break
+					}
 					var to btcutil.Address
 					var change btcutil.Amount
 					// pick a random address
