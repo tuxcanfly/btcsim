@@ -45,6 +45,7 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 	}
 	// Add node as peer for mining
 	args.Extra = append(args.Extra, "--addnode=127.0.0.1:18555")
+	args.Extra = append(args.Extra, "--blocknotify=btcnotifier --port=19550 %s")
 
 	logFile, err := getLogFile(args.prefix)
 	if err != nil {
@@ -63,6 +64,13 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 		log.Printf("%s: Cannot connect to node: %v", miner, err)
 		return nil, err
 	}
+
+	go func() {
+		rpcListener := NewListener("19550")
+		if err := rpcListener.listen(); err != nil {
+			log.Printf("err: %v", err)
+		}
+	}()
 
 	// Use just one core for mining.
 	if err := miner.StartMining(); err != nil {

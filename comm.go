@@ -117,6 +117,7 @@ func (com *Communication) Start(actors []*Actor, node *Node, txCurve map[int32]*
 	// Start mining.
 	miner, err := NewMiner(miningAddrs, com.exit, com.height, com.txpool)
 	if err != nil {
+		log.Printf("err: %v", err)
 		close(com.exit)
 		close(tpsChan)
 		close(tpbChan)
@@ -577,9 +578,6 @@ func (com *Communication) Shutdown(miner *Miner, actors []*Actor, node *Node) {
 	<-com.exit
 	if miner != nil {
 		miner.Shutdown()
-	}
-	for _, a := range actors {
-		a.Shutdown()
 	}
 	if node != nil {
 		node.Shutdown()
