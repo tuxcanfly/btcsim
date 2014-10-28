@@ -33,8 +33,6 @@ func init() {
 }
 
 func main() {
-	fmt.Printf("%v\n", os.Args)
-
 	client, err := rpc.Dial("tcp", fmt.Sprintf("127.0.0.1:%s", *port))
 	if err != nil {
 		log.Fatal(err)

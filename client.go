@@ -47,7 +47,9 @@ func (l *Listener) BlockNotify(hashStr string, ack *bool) error {
 	if err != nil {
 		return err
 	}
-	l.handlers.OnBlockConnected(hash, l.height)
+	go func() {
+		l.handlers.OnBlockConnected(hash, l.height)
+	}()
 	return nil
 }
 
@@ -56,7 +58,9 @@ func (l *Listener) WalletNotify(hashStr string, ack *bool) error {
 	if err != nil {
 		return err
 	}
-	// tx amt is not available here, pass zero
-	l.handlers.OnTxAccepted(hash, 0)
+	go func() {
+		// tx amt is not available here, pass zero
+		l.handlers.OnTxAccepted(hash, 0)
+	}()
 	return nil
 }
