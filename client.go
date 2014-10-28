@@ -4,16 +4,23 @@ import (
 	"fmt"
 	"net"
 	"net/rpc"
+
+	"github.com/conformal/btcrpcclient"
+	"github.com/conformal/btcwire"
 )
 
 type Listener struct {
-	port   string
-	height int32
+	name     string
+	port     string
+	height   int32
+	handlers *btcrpcclient.NotificationHandlers
 }
 
-func NewListener(port string) *Listener {
+func NewListener(name, port string, handlers *btcrpcclient.NotificationHandlers) *Listener {
 	return &Listener{
-		port: port,
+		name:     name,
+		port:     port,
+		handlers: handlers,
 	}
 }
 
@@ -27,15 +34,28 @@ func (l *Listener) listen() error {
 	if err != nil {
 		return err
 	}
-	if err := rpc.Register(l); err != nil {
+	if err := rpc.RegisterName(l.name, l); err != nil {
 		return err
 	}
 	rpc.Accept(inbound)
 	return nil
 }
 
-func (l *Listener) OnBlockConnected(hash string, ack *bool) error {
+func (l *Listener) OnBlockConnected(hashStr string, ack *bool) error {
 	l.height += 1
-	fmt.Printf("\r%d/%d", l.height, *startBlock)
+	hash, err := btcwire.NewShaHashFromStr(hashStr)
+	if err != nil {
+		return err
+	}
+	l.handlers.OnBlockConnected(hash, l.height)
+	return nil
+}
+
+func (l *Listener) OnTxAccepted(hashStr string, ack *bool) error {
+	hash, err := btcwire.NewShaHashFromStr(hashStr)
+	if err != nil {
+		return err
+	}
+	l.handlers.OnTxAccepted(hash, 0)
 	return nil
 }

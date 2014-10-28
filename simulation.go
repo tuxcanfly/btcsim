@@ -5,6 +5,11 @@ import (
 	"log"
 	"math"
 	"os"
+	"time"
+
+	rpc "github.com/conformal/btcrpcclient"
+	"github.com/conformal/btcutil"
+	"github.com/conformal/btcwire"
 )
 
 // MissingCertPairFile is raised when one of the cert pair files is missing
@@ -115,12 +120,31 @@ func (s *Simulation) Start() error {
 		}
 	}
 
+	ntfnHandlers := &rpc.NotificationHandlers{
+		OnBlockConnected: func(hash *btcwire.ShaHash, height int32) {
+			block := &Block{
+				hash:   hash,
+				height: height,
+			}
+			select {
+			case s.com.blockQueue.enqueue <- block:
+			case <-s.com.exit:
+			}
+		},
+		OnTxAccepted: func(hash *btcwire.ShaHash, amount btcutil.Amount) {
+			s.com.timeReceived <- time.Now()
+		},
+	}
+
 	log.Println("Starting node on simnet...")
 	args, err := newBitcoindArgs("node")
 	if err != nil {
 		log.Printf("Cannot create node args: %v", err)
 		return err
 	}
+	args.Extra = append(args.Extra, "--blocknotify=btcnotifier --name=node.block --event=block --port=19555 %s")
+	args.Extra = append(args.Extra, "--walletnotify=btcnotifier --name=node.tx --event=tx --port=19556 %s")
+
 	logFile, err := getLogFile(args.prefix)
 	if err != nil {
 		log.Printf("Cannot get log file, logging disabled: %v", err)
@@ -138,6 +162,19 @@ func (s *Simulation) Start() error {
 		log.Printf("%s: Cannot connect to node: %v", node, err)
 		return err
 	}
+
+	go func() {
+		rpcListener := NewListener("node.block", "19555", ntfnHandlers)
+		if err := rpcListener.listen(); err != nil {
+			log.Printf("err: %v", err)
+		}
+	}()
+	go func() {
+		rpcListener := NewListener("node.tx", "19556", ntfnHandlers)
+		if err := rpcListener.listen(); err != nil {
+			log.Printf("err: %v", err)
+		}
+	}()
 
 	for i := 0; i < *numActors; i++ {
 		a, err := NewActor(node, uint16(18557+i))

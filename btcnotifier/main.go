@@ -9,13 +9,30 @@ import (
 )
 
 var (
+	// map notification events to RPC call
+	notifications = map[string]string{
+		"block": "OnBlockConnected",
+		"tx":    "OnTxAccepted",
+	}
+
+	// name
+	name = flag.String("name", "", "RPC Listener name")
+
+	// event
+	event = flag.String("event", "block", "Notification event")
+
 	// port
 	port = flag.String("port", "19550", "RPC server port")
 )
 
-func main() {
+func init() {
 	flag.Parse()
+	if _, ok := notifications[*event]; !ok {
+		log.Fatal("invalid event - must be one of 'block', 'tx'")
+	}
+}
 
+func main() {
 	fmt.Printf("%v\n", os.Args)
 
 	client, err := rpc.Dial("tcp", fmt.Sprintf("127.0.0.1:%s", *port))
@@ -24,7 +41,9 @@ func main() {
 	}
 
 	var reply bool
-	err = client.Call("Listener.OnBlockConnected", os.Args[2], &reply)
+	method := fmt.Sprintf("%s.%s", *name, notifications[*event])
+	arg := os.Args[4]
+	err = client.Call(method, arg, &reply)
 	if err != nil {
 		log.Fatal(err)
 	}
