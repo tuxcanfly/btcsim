@@ -34,14 +34,12 @@ const (
 type Simulation struct {
 	txCurve map[int32]*Row
 	com     *Communication
-	actors  []*Actor
 }
 
 // NewSimulation returns a Simulation instance
 func NewSimulation() *Simulation {
 	s := &Simulation{
 		txCurve: make(map[int32]*Row),
-		actors:  make([]*Actor, 0, *numActors),
 		com:     NewCommunication(),
 	}
 	return s
@@ -176,22 +174,13 @@ func (s *Simulation) Start() error {
 		}
 	}()
 
-	for i := 0; i < *numActors; i++ {
-		a, err := NewActor(node, uint16(18557+i))
-		if err != nil {
-			log.Printf("%s: Cannot create actor: %v", a, err)
-			continue
-		}
-		s.actors = append(s.actors, a)
-	}
-
 	// if we receive an interrupt, proceed to shutdown
 	addInterruptHandler(func() {
 		close(s.com.exit)
 	})
 
 	// Start simulation.
-	tpsChan, tpbChan := s.com.Start(s.actors, node, s.txCurve)
+	tpsChan, tpbChan := s.com.Start(node, s.txCurve)
 	s.com.WaitForShutdown()
 
 	tps, ok := <-tpsChan

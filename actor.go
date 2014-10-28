@@ -5,7 +5,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -37,7 +36,6 @@ type Actor struct {
 	wg               sync.WaitGroup
 	ownedAddresses   []btcutil.Address
 	utxoQueue        *utxoQueue
-	miningAddr       chan btcutil.Address
 	walletPassphrase string
 }
 
@@ -55,7 +53,6 @@ func NewActor(node *Node, port uint16) (*Actor, error) {
 		Node:             node,
 		quit:             make(chan struct{}),
 		ownedAddresses:   make([]btcutil.Address, *maxAddresses),
-		miningAddr:       make(chan btcutil.Address),
 		walletPassphrase: "walletpass",
 		utxoQueue: &utxoQueue{
 			enqueue: make(chan *TxOut),
@@ -84,9 +81,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 	}
 
 	// Create wallet addresses and unlock wallet.
-	log.Printf("%s: Creating wallet addresses...", a)
 	for i := range a.ownedAddresses {
-		fmt.Printf("\r%d/%d", i+1, len(a.ownedAddresses))
 		addr, err := a.client.GetNewAddress()
 		if err != nil {
 			log.Printf("%s: Cannot create address #%d", a, i+1)
@@ -95,10 +90,6 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 		}
 		a.ownedAddresses[i] = addr
 	}
-	fmt.Printf("\n")
-
-	// Send a random address that will be used by the cpu miner.
-	a.miningAddr <- a.ownedAddresses[rand.Int()%len(a.ownedAddresses)]
 
 	// Start a goroutine that queues up a set of utxos belonging to this
 	// actor. The utxos are sent from com.poolUtxos which in turn receives

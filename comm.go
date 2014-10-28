@@ -77,9 +77,33 @@ func NewCommunication() *Communication {
 
 // Start handles the main part of a simulation by starting
 // all the necessary goroutines.
-func (com *Communication) Start(actors []*Actor, node *Node, txCurve map[int32]*Row) (tpsChan chan float64, tpbChan chan int) {
+func (com *Communication) Start(node *Node, txCurve map[int32]*Row) (tpsChan chan float64, tpbChan chan int) {
 	tpsChan = make(chan float64, 1)
 	tpbChan = make(chan int, 1)
+
+	// Start a goroutine to check if all actors have failed
+	com.wg.Add(1)
+	go com.failedActors()
+
+	// Start mining.
+	miner, err := NewMiner(com.exit, com.height, com.txpool)
+	if err != nil {
+		log.Printf("err: %v", err)
+		close(com.exit)
+		close(tpsChan)
+		close(tpbChan)
+		return
+	}
+
+	actors := make([]*Actor, 0, *numActors)
+	for i := 0; i < *numActors; i++ {
+		a, err := NewActor(miner.Node, uint16(18557+i))
+		if err != nil {
+			log.Printf("%s: Cannot create actor: %v", a, err)
+			continue
+		}
+		actors = append(actors, a)
+	}
 
 	// Start actors
 	for _, a := range actors {
@@ -92,38 +116,6 @@ func (com *Communication) Start(actors []*Actor, node *Node, txCurve map[int32]*
 				node.Shutdown()
 			}
 		}(a, com)
-	}
-
-	// Start a goroutine to check if all actors have failed
-	com.wg.Add(1)
-	go com.failedActors()
-
-	miningAddrs := make([]btcutil.Address, *numActors)
-	for i, a := range actors {
-		select {
-		case miningAddrs[i] = <-a.miningAddr:
-		case <-a.quit:
-			// This actor has quit
-			select {
-			case <-com.exit:
-				close(tpsChan)
-				close(tpbChan)
-				return
-			default:
-			}
-		}
-	}
-
-	// Start mining.
-	miner, err := NewMiner(miningAddrs, com.exit, com.height, com.txpool)
-	if err != nil {
-		log.Printf("err: %v", err)
-		close(com.exit)
-		close(tpsChan)
-		close(tpbChan)
-		com.wg.Add(1)
-		go com.Shutdown(miner, actors, node)
-		return
 	}
 
 	// Start a goroutine to estimate tps

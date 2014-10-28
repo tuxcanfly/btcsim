@@ -21,7 +21,7 @@ type Miner struct {
 
 // NewMiner starts a cpu-mining enabled btcd instane and returns an rpc client
 // to control it.
-func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
+func NewMiner(exit chan struct{},
 	height chan<- int32, txpool chan<- struct{}) (*Miner, error) {
 
 	ntfnHandlers := &rpc.NotificationHandlers{
@@ -63,13 +63,6 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 	args.RPCPort = "18551"
 	// if passed, set blockmaxsize to allow mining large blocks
 	args.Extra = []string{fmt.Sprintf("--blockmaxsize=%d", *maxBlockSize)}
-	// set the actors' mining addresses
-	for _, addr := range miningAddrs {
-		// make sure addr was initialized
-		if addr != nil {
-			args.Extra = append(args.Extra, "--miningaddr="+addr.EncodeAddress())
-		}
-	}
 	// Add node as peer for mining
 	args.Extra = append(args.Extra, "--addnode=127.0.0.1:18555")
 	args.Extra = append(args.Extra, "--blocknotify=btcnotifier --name=miner.block --event=block --port=19550 %s")
