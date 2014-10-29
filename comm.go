@@ -48,7 +48,6 @@ type Communication struct {
 	errChan       chan struct{}
 	height        chan int32
 	split         chan int
-	txpool        chan struct{}
 	coinbaseQueue chan *btcutil.Tx
 	blockQueue    *blockQueue
 }
@@ -63,7 +62,6 @@ func NewCommunication() *Communication {
 		blockTxCount:  make(chan int, *numActors),
 		height:        make(chan int32),
 		split:         make(chan int),
-		txpool:        make(chan struct{}),
 		coinbaseQueue: make(chan *btcutil.Tx, btcchain.CoinbaseMaturity),
 		exit:          make(chan struct{}),
 		errChan:       make(chan struct{}, *numActors),
@@ -86,7 +84,7 @@ func (com *Communication) Start(node *Node, txCurve map[int32]*Row) (tpsChan cha
 	go com.failedActors()
 
 	// Start mining.
-	miner, err := NewMiner(com.exit, com.height, com.txpool)
+	miner, err := NewMiner(com.exit, com.height)
 	if err != nil {
 		log.Printf("err: %v", err)
 		close(com.exit)
@@ -428,7 +426,6 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 				return
 			}
 
-			var wg sync.WaitGroup
 			// count the number of utxos available in total
 			var utxoCount int
 			for _, a := range actors {
@@ -523,10 +520,6 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 					addr := a.ownedAddresses[rand.Int()%len(a.ownedAddresses)]
 					select {
 					case com.downstream <- addr:
-						// For every address sent downstream (one transaction about to happen),
-						// spawn a goroutine to listen for an accepted transaction in the mempool
-						wg.Add(1)
-						go com.txPoolRecv(&wg)
 					case <-com.exit:
 						return
 					}
@@ -538,10 +531,6 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 					fmt.Printf("\r%d/%d", i+totalTx+1, reqTxCount)
 					select {
 					case com.split <- multiplier:
-						// For every address sent downstream (one transaction about to happen),
-						// spawn a goroutine to listen for an accepted transaction in the mempool
-						wg.Add(1)
-						go com.txPoolRecv(&wg)
 					case <-com.exit:
 						return
 					}
@@ -550,7 +539,6 @@ func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, acto
 
 			fmt.Printf("\n")
 			log.Printf("Waiting for miner...")
-			wg.Wait()
 			// mine the above tx in the next block
 			if err := miner.StartMining(); err != nil {
 				close(com.exit)
@@ -580,15 +568,4 @@ func (com *Communication) Shutdown(miner *Miner, actors []*Actor, node *Node) {
 // has returned.
 func (com *Communication) WaitForShutdown() {
 	com.wg.Wait()
-}
-
-// txPoolRecv listens for transactions accepted in the miner mempool
-// or errors happened during the creation or send of a transaction.
-func (com *Communication) txPoolRecv(wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	select {
-	case <-com.txpool:
-	case <-com.exit:
-	}
 }

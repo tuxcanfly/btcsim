@@ -9,7 +9,6 @@ import (
 	"log"
 
 	rpc "github.com/conformal/btcrpcclient"
-	"github.com/conformal/btcutil"
 	"github.com/conformal/btcwire"
 )
 
@@ -22,7 +21,7 @@ type Miner struct {
 // NewMiner starts a cpu-mining enabled btcd instane and returns an rpc client
 // to control it.
 func NewMiner(exit chan struct{},
-	height chan<- int32, txpool chan<- struct{}) (*Miner, error) {
+	height chan<- int32) (*Miner, error) {
 
 	ntfnHandlers := &rpc.NotificationHandlers{
 		// When a block higher than stopBlock connects to the chain,
@@ -35,16 +34,6 @@ func NewMiner(exit chan struct{},
 				}
 			} else {
 				fmt.Printf("\r%d/%d", h, *startBlock)
-			}
-		},
-		// Send a signal that a tx has been accepted into the mempool. Based on
-		// the tx curve, the receiver will need to wait until required no of tx
-		// are filled up in the mempool
-		OnTxAccepted: func(hash *btcwire.ShaHash, amount btcutil.Amount) {
-			if txpool != nil {
-				// this will not be blocked because we're creating only
-				// required no of tx and receiving all of them
-				txpool <- struct{}{}
 			}
 		},
 	}
@@ -66,7 +55,6 @@ func NewMiner(exit chan struct{},
 	// Add node as peer for mining
 	args.Extra = append(args.Extra, "--addnode=127.0.0.1:18555")
 	args.Extra = append(args.Extra, "--blocknotify=btcnotifier --name=miner.block --event=block --port=19550 %s")
-	args.Extra = append(args.Extra, "--walletnotify=btcnotifier --name=miner.tx --event=tx --port=19551 %s")
 
 	logFile, err := getLogFile(args.prefix)
 	if err != nil {
@@ -88,12 +76,6 @@ func NewMiner(exit chan struct{},
 
 	go func() {
 		rpcListener := NewListener("miner.block", "19550", ntfnHandlers)
-		if err := rpcListener.listen(); err != nil {
-			log.Printf("err: %v", err)
-		}
-	}()
-	go func() {
-		rpcListener := NewListener("miner.tx", "19551", ntfnHandlers)
 		if err := rpcListener.listen(); err != nil {
 			log.Printf("err: %v", err)
 		}
