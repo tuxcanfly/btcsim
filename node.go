@@ -116,6 +116,12 @@ func (n *Node) Connect() error {
 	return nil
 }
 
+// Generate makes the CPU miner mine the requested number of blocks
+func (n *Node) Generate(numBlocks uint32) error {
+	_, err := n.client.Generate(numBlocks)
+	return err
+}
+
 // Stop interrupts a process and waits until it exits
 // On windows, interrupt is not supported, so a kill
 // signal is used instead

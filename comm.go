@@ -85,20 +85,16 @@ func NewCommunication() *Communication {
 
 // Start handles the main part of a simulation by starting
 // all the necessary goroutines.
-func (com *Communication) Start(miner *Miner, actors []*Actor, node *Node) {
+func (com *Communication) Start(actors []*Actor, node *Node) {
 	// Start a goroutine to coordinate transactions
 	com.wg.Add(1)
-	go com.Communicate(miner, actors)
+	go com.Communicate(node, actors)
 
 	com.wg.Add(1)
 	go com.queueBlocks()
 
 	com.wg.Add(1)
 	go com.poolUtxos(node.client, actors)
-
-	// Start a goroutine for shuting down the simulation when appropriate
-	com.wg.Add(1)
-	go com.Shutdown(miner, actors, node)
 
 	return
 }
@@ -275,7 +271,7 @@ func (com *Communication) getUtxo(tx *btcutil.Tx,
 
 // Communicate generates tx and controls the mining according
 // to the input block height vs tx count curve
-func (com *Communication) Communicate(miner *Miner, actors []*Actor) {
+func (com *Communication) Communicate(node *Node, actors []*Actor) {
 	defer com.wg.Done()
 
 	// wait until this block is processed
@@ -307,33 +303,10 @@ func (com *Communication) Communicate(miner *Miner, actors []*Actor) {
 	}
 
 	fmt.Printf("\n")
-	log.Printf("Waiting for miner...")
+	log.Printf("Waiting for miner node...")
 	wg.Wait()
 	// mine the above tx in the next block
-	if err := miner.Generate(1); err != nil {
+	if err := node.Generate(1); err != nil {
 		close(com.exit)
 	}
-}
-
-// Shutdown shuts down the simulation by killing the mining and the
-// initial node processes and shuts down all actors.
-func (com *Communication) Shutdown(miner *Miner, actors []*Actor, node *Node) {
-	defer com.wg.Done()
-
-	<-com.exit
-	if miner != nil {
-		miner.Shutdown()
-	}
-	for _, a := range actors {
-		a.Shutdown()
-	}
-	if node != nil {
-		node.Shutdown()
-	}
-}
-
-// WaitForShutdown waits until every goroutine inside com.Start
-// has returned.
-func (com *Communication) WaitForShutdown() {
-	com.wg.Wait()
 }

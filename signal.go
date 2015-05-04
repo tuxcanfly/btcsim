@@ -40,7 +40,7 @@ func mainInterruptHandler() {
 	for {
 		select {
 		case <-interruptChannel:
-			log.Printf("Received SIGINT (Ctrl+C).  Shutting down...")
+			log.Printf("Received SIGINT (Ctrl+C).  Shutting down...\n")
 			// run handlers in LIFO order.
 			for i := range interruptCallbacks {
 				idx := len(interruptCallbacks) - 1 - i

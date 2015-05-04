@@ -91,8 +91,7 @@ func main() {
 		}()
 	}
 
-	simulation := NewSimulation()
-	if err := simulation.Start(); err != nil {
+	if err := Start(); err != nil {
 		log.Printf("Cannot start simulation: %v", err)
 		os.Exit(1)
 	}
