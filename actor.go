@@ -18,10 +18,7 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"io"
-	"log"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -51,7 +48,6 @@ type Actor struct {
 	wg               sync.WaitGroup
 	ownedAddresses   []btcutil.Address
 	utxoQueue        *utxoQueue
-	miningAddr       chan btcutil.Address
 	walletPassphrase string
 }
 
@@ -64,14 +60,14 @@ type TxOut struct {
 // NewActor creates a new actor which runs its own wallet process connecting
 // to the btcd node server specified by node, and listening for simulator
 // websocket connections on the specified port.
-func NewActor(node *Node, port uint16) (*Actor, error) {
+func NewActor(port uint16, certs []byte) (*Actor, error) {
 	// Please don't run this as root.
 	if port < 1024 {
 		return nil, errors.New("invalid actor port")
 	}
 
 	// Set btcwallet node args
-	args, err := newBtcwalletArgs(port, node.Args.(*btcdArgs))
+	args, err := newBtcwalletArgs(port, certs)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +81,6 @@ func NewActor(node *Node, port uint16) (*Actor, error) {
 		Node:             btcwallet,
 		quit:             make(chan struct{}),
 		ownedAddresses:   make([]btcutil.Address, *maxAddresses),
-		miningAddr:       make(chan btcutil.Address),
 		walletPassphrase: "password",
 		utxoQueue: &utxoQueue{
 			enqueue: make(chan *TxOut),
@@ -106,12 +101,12 @@ func NewActor(node *Node, port uint16) (*Actor, error) {
 // If the RPC client connection cannot be established or wallet cannot
 // be created, the wallet process is killed and the actor directory
 // removed.
-func (a *Actor) Start(stderr, stdout io.Writer) error {
+func (a *Actor) Start(stderr, stdout io.Writer) (btcutil.Address, error) {
 	connected := make(chan struct{})
 	const timeoutSecs int64 = 3600 * 24
 
 	if err := a.Node.Start(); err != nil {
-		return err
+		return nil, err
 	}
 	defer a.Node.Shutdown()
 
@@ -123,7 +118,7 @@ func (a *Actor) Start(stderr, stdout io.Writer) error {
 	a.handlers = ntfnHandlers
 
 	if err := a.Connect(); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Wait for btcd to connect
@@ -138,27 +133,8 @@ func (a *Actor) Start(stderr, stdout io.Writer) error {
 		break
 	}
 
-	// Create wallet addresses and unlock wallet.
-	log.Printf("%s: Creating wallet addresses...", a)
-	for i := range a.ownedAddresses {
-		fmt.Printf("\r%d/%d", i+1, len(a.ownedAddresses))
-		addr, err := a.client.GetNewAddress("")
-		if err != nil {
-			return err
-		}
-		a.ownedAddresses[i] = addr
-	}
-	fmt.Printf("\n")
-
-	if err := a.client.WalletPassphrase(a.walletPassphrase,
-		timeoutSecs); err != nil {
-		return err
-	}
-
 	// Send a random address that will be used by the cpu miner.
-	a.miningAddr <- a.ownedAddresses[rand.Int()%len(a.ownedAddresses)]
-
-	return nil
+	return a.client.GetNewAddress("")
 }
 
 // Shutdown performs a shutdown down the actor by first signalling

@@ -23,7 +23,7 @@ import (
 
 func TestnewBtcwalletArgs(t *testing.T) {
 	btcdArgs, err := newBtcdArgs("node")
-	args, err := newBtcwalletArgs(18554, btcdArgs)
+	args, err := newBtcwalletArgs(18554, btcdArgs.certificates)
 	defer btcdArgs.Cleanup()
 	defer args.Cleanup()
 	if err != nil {

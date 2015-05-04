@@ -66,7 +66,7 @@ var (
 func init() {
 	flag.Parse()
 
-	// make sure the app data dir exists
+	// Make sure the app data dir exists
 	if !fileExists(AppDataDir) {
 		if err := os.Mkdir(AppDataDir, 0700); err != nil {
 			log.Fatalf("Cannot create app data dir: %v", err)

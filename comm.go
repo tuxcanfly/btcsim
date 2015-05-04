@@ -59,7 +59,7 @@ type Communication struct {
 	height        chan int32
 	split         chan int
 	coinbaseQueue chan *btcutil.Tx
-	blockQueue    *blockQueue
+	blocks        *blockQueue
 }
 
 // NewCommunication creates a new data structure with all the
@@ -75,7 +75,7 @@ func NewCommunication() *Communication {
 		coinbaseQueue: make(chan *btcutil.Tx, blockchain.CoinbaseMaturity),
 		exit:          make(chan struct{}),
 		errs:          make(chan error, *numActors),
-		blockQueue: &blockQueue{
+		blocks: &blockQueue{
 			enqueue:   make(chan *Block),
 			dequeue:   make(chan *Block),
 			processed: make(chan *Block),
@@ -104,7 +104,7 @@ func (com *Communication) queueBlocks() {
 	defer com.wg.Done()
 
 	var blocks []*Block
-	enqueue := com.blockQueue.enqueue
+	enqueue := com.blocks.enqueue
 	var dequeue chan *Block
 	var next *Block
 out:
@@ -123,7 +123,7 @@ out:
 			}
 			if len(blocks) == 0 {
 				next = n
-				dequeue = com.blockQueue.dequeue
+				dequeue = com.blocks.dequeue
 			}
 			blocks = append(blocks, n)
 		case dequeue <- next:
@@ -143,7 +143,7 @@ out:
 			break out
 		}
 	}
-	close(com.blockQueue.dequeue)
+	close(com.blocks.dequeue)
 }
 
 // poolUtxos receives a new block notification from the node server
@@ -153,7 +153,7 @@ func (com *Communication) poolUtxos(client *rpc.Client, actors []*Actor) {
 	// Update utxo pool on each block connected
 	for {
 		select {
-		case b, ok := <-com.blockQueue.dequeue:
+		case b, ok := <-com.blocks.dequeue:
 			if !ok {
 				return
 			}
@@ -216,7 +216,7 @@ func (com *Communication) poolUtxos(client *rpc.Client, actors []*Actor) {
 			log.Printf("Block %s (height %d) attached with %d transactions", b.hash, b.height, txCount)
 			log.Printf("%d transaction outputs available to spend", utxoCount)
 			select {
-			case com.blockQueue.processed <- b:
+			case com.blocks.processed <- b:
 			case <-com.exit:
 				return
 			}
@@ -276,7 +276,7 @@ func (com *Communication) Communicate(node *Node, actors []*Actor) {
 
 	// wait until this block is processed
 	select {
-	case <-com.blockQueue.processed:
+	case <-com.blocks.processed:
 	case <-com.exit:
 		return
 	}

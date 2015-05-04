@@ -17,11 +17,14 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/btcsuite/btcd/wire"
 	rpc "github.com/btcsuite/btcrpcclient"
+	"github.com/btcsuite/btcutil"
 )
 
 // Start runs the simulation by launching a node, actors and manager
@@ -56,7 +59,7 @@ func Start() error {
 				height: height,
 			}
 			select {
-			case com.blockQueue.enqueue <- block:
+			case com.blocks.enqueue <- block:
 			case <-com.exit:
 			}
 		},
@@ -97,7 +100,7 @@ func Start() error {
 	// Initialize the actors
 	actors := make([]*Actor, 0, *numActors)
 	for i := 0; i < *numActors; i++ {
-		a, err := NewActor(node, uint16(18557+i))
+		a, err := NewActor(uint16(18557+i), args.certificates)
 		if err != nil {
 			return err
 		}
@@ -105,21 +108,36 @@ func Start() error {
 	}
 
 	// Start actors
+	var wg sync.WaitGroup
+	addrs := make([]btcutil.Address, 0, len(actors))
 	for _, a := range actors {
-		com.wg.Add(1)
+		wg.Add(1)
 		go func(a *Actor) {
-			defer com.wg.Done()
-			if err := a.Start(os.Stderr, os.Stdout); err != nil {
+			defer wg.Done()
+			addr, err := a.Start(os.Stderr, os.Stdout)
+			if err != nil {
 				com.errs <- err
 				return
 			}
+			addrs = append(addrs, addr)
 			defer a.Shutdown()
 		}(a)
 	}
 
+	wg.Wait()
+	// Set the actors' mining addresses
+	for _, addr := range addrs {
+		// Make sure addr was initialized
+		if addr != nil {
+			arg := fmt.Sprintf("--miningaddr=%s", addr)
+			args.Extra = append(args.Extra, arg)
+		}
+	}
+
+	// Start the simulation
 	com.Start(actors, node)
 
-	// if we receive an interrupt, proceed to shutdown
+	// If we receive an interrupt, proceed to shutdown
 	addInterruptHandler(func() {
 		close(com.exit)
 	})
