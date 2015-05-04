@@ -60,9 +60,6 @@ func newBtcdArgs(prefix string) (*btcdArgs, error) {
 		exe:      "btcd",
 		endpoint: "ws",
 	}
-	if err := a.SetDefaults(); err != nil {
-		return nil, err
-	}
 	return a, nil
 }
 

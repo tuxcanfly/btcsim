@@ -17,57 +17,12 @@
 package main
 
 import (
-	"encoding/csv"
-	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
-	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/btcsuite/btcutil"
 )
-
-// Row represents a row in the CSV file
-// and holds the key and value ints
-type Row struct {
-	utxoCount int
-	txCount   int
-}
-
-// readCSV reads the given filename and
-// returns a slice of rows
-func readCSV(r io.Reader) (map[int32]*Row, error) {
-	m := make(map[int32]*Row)
-	reader := csv.NewReader(r)
-	for {
-		row, err := reader.Read()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, err
-		}
-		b, err := strconv.Atoi(row[0])
-		if err != nil {
-			return nil, err
-		}
-		u, err := strconv.Atoi(row[1])
-		if err != nil {
-			return nil, err
-		}
-		t, err := strconv.Atoi(row[2])
-		if err != nil {
-			return nil, err
-		}
-		m[int32(b)] = &Row{u, t}
-	}
-	return m, nil
-}
-
-func getLogFile(prefix string) (*os.File, error) {
-	return os.Create(filepath.Join(AppDataDir, fmt.Sprintf("%s.log", prefix)))
-}
 
 // genCertPair generates a key/cert pair to the paths provided.
 func genCertPair(certFile, keyFile string) error {

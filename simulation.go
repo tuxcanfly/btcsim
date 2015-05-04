@@ -19,9 +19,7 @@ package main
 import (
 	"fmt"
 	"log"
-	"math"
 	"os"
-	"time"
 
 	"github.com/btcsuite/btcd/wire"
 	rpc "github.com/btcsuite/btcrpcclient"
@@ -32,86 +30,22 @@ import (
 type MissingCertPairFile string
 
 func (m MissingCertPairFile) Error() string {
-	return fmt.Sprintf("could not find TLS certificate pair file: %v", string(m))
+	return fmt.Sprintf("could not find TLS certificate pair file: %v", m)
 }
-
-const (
-	// SimRows is the number of rows in the default curve
-	SimRows = 10
-
-	// SimUtxoCount is the starting number of utxos in the default curve
-	SimUtxoCount = 2000
-
-	// SimTxCount is the starting number of tx in the default curve
-	SimTxCount = 1000
-)
 
 // Simulation contains the data required to run a simulation
 type Simulation struct {
-	txCurve map[int32]*Row
-	com     *Communication
-	actors  []*Actor
+	com    *Communication
+	actors []*Actor
 }
 
 // NewSimulation returns a Simulation instance
 func NewSimulation() *Simulation {
 	s := &Simulation{
-		txCurve: make(map[int32]*Row),
-		actors:  make([]*Actor, 0, *numActors),
-		com:     NewCommunication(),
+		actors: make([]*Actor, 0, *numActors),
+		com:    NewCommunication(),
 	}
 	return s
-}
-
-// readTxCurve reads and sets the txcurve to simulate
-// It defaults to a simple linears simulation
-func (s *Simulation) readTxCurve(txCurvePath string) error {
-	var txCurve map[int32]*Row
-	if txCurvePath == "" {
-		// if -txcurve argument is omitted, use a simple
-		// linear simulation curve as the default
-		txCurve = make(map[int32]*Row, SimRows)
-		for i := 1; i <= SimRows; i++ {
-			block := int32(*startBlock + i)
-			txCurve[block] = &Row{
-				utxoCount: i * SimUtxoCount,
-				txCount:   i * SimTxCount,
-			}
-		}
-	} else {
-		file, err := os.Open(txCurvePath)
-		defer file.Close()
-		if err != nil {
-			return err
-		}
-		txCurve, err = readCSV(file)
-		if err != nil {
-			return err
-		}
-	}
-	s.txCurve = txCurve
-	return nil
-}
-
-// updateFlags updates the flags based on the txCurve
-func (s *Simulation) updateFlags() {
-	// set min block height from the curve as startBlock
-	// and max block height as stopBlock
-	for k := range s.txCurve {
-		block := int(k)
-		if block < *startBlock {
-			*startBlock = block
-		}
-		if block > *stopBlock {
-			*stopBlock = block
-		}
-	}
-
-	if *maxSplit > *maxAddresses {
-		// cap max split at maxaddresses, becauase each split requires
-		// a unique return address
-		*maxSplit = *maxAddresses
-	}
 }
 
 // Start runs the simulation by launching a node, actors and com.Start
@@ -136,6 +70,7 @@ func (s *Simulation) Start() error {
 		}
 	}
 
+	// Setup node handlers to queue block processing
 	ntfnHandlers := &rpc.NotificationHandlers{
 		OnBlockConnected: func(hash *wire.ShaHash, height int32) {
 			block := &Block{
@@ -147,73 +82,92 @@ func (s *Simulation) Start() error {
 			case <-s.com.exit:
 			}
 		},
-		OnTxAccepted: func(hash *wire.ShaHash, amount btcutil.Amount) {
-			s.com.timeReceived <- time.Now()
-		},
 	}
 
 	log.Println("Starting node on simnet...")
+
+	// Initialize and setup the main btcd node args
 	args, err := newBtcdArgs("node")
 	if err != nil {
-		log.Printf("Cannot create node args: %v", err)
 		return err
 	}
-	logFile, err := getLogFile(args.prefix)
-	if err != nil {
-		log.Printf("Cannot get log file, logging disabled: %v", err)
+
+	// Initialize data and log dirs
+	if err := args.SetDefaults(); err != nil {
+		return err
 	}
-	node, err := NewNodeFromArgs(args, ntfnHandlers, logFile)
+	defer args.Cleanup()
+
+	// Initialize the main node and the client
+	node, err := NewNodeFromArgs(args, ntfnHandlers, nil)
 	if err != nil {
-		log.Printf("%s: Cannot create node: %v", node, err)
 		return err
 	}
 	if err := node.Start(); err != nil {
-		log.Printf("%s: Cannot start node: %v", node, err)
 		return err
 	}
 	if err := node.Connect(); err != nil {
-		log.Printf("%s: Cannot connect to node: %v", node, err)
 		return err
 	}
-
-	// Register for block notifications.
 	if err := node.client.NotifyBlocks(); err != nil {
-		log.Printf("%s: Cannot register for block notifications: %v", node, err)
 		return err
 	}
-
-	// Register for transaction notifications
 	if err := node.client.NotifyNewTransactions(false); err != nil {
-		log.Printf("%s: Cannot register for transactions notifications: %v", node, err)
 		return err
 	}
 
+	// Initialize the actors
 	for i := 0; i < *numActors; i++ {
 		a, err := NewActor(node, uint16(18557+i))
 		if err != nil {
-			log.Printf("%s: Cannot create actor: %v", a, err)
-			continue
+			return err
 		}
 		s.actors = append(s.actors, a)
 	}
+
+	// Start actors
+	for _, a := range s.actors {
+		s.com.wg.Add(1)
+		go func(a *Actor, com *Communication) {
+			defer s.com.wg.Done()
+			if err := a.Start(os.Stderr, os.Stdout, com); err != nil {
+				s.com.errs <- err
+				return
+			}
+			defer a.Shutdown()
+		}(a, s.com)
+	}
+
+	miningAddrs := make([]btcutil.Address, len(s.actors))
+	for i, a := range s.actors {
+		select {
+		case miningAddrs[i] = <-a.miningAddr:
+		case <-a.quit:
+			// This actor has quit
+			select {
+			case <-s.com.exit:
+				return nil
+			default:
+			}
+		}
+	}
+
+	// Start a miner process.
+	miner, err := NewMiner(miningAddrs)
+	if err != nil {
+		return err
+	}
+
+	// Add mining node listen interface as a node
+	node.client.AddNode("localhost:18550", rpc.ANAdd)
+
+	s.com.Start(miner, s.actors, node)
 
 	// if we receive an interrupt, proceed to shutdown
 	addInterruptHandler(func() {
 		close(s.com.exit)
 	})
 
-	// Start simulation.
-	tpsChan, tpbChan := s.com.Start(s.actors, node, s.txCurve)
-	s.com.WaitForShutdown()
-
-	tps, ok := <-tpsChan
-	if ok && !math.IsNaN(tps) {
-		log.Printf("Average transactions per sec: %.2f", tps)
-	}
-
-	tpb, ok := <-tpbChan
-	if ok && tpb > 0 {
-		log.Printf("Maximum transactions per block: %v", tpb)
-	}
+	<-s.com.exit
 	return nil
 }

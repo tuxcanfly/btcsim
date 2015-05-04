@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/btcsuite/btcd/wire"
-	rpc "github.com/btcsuite/btcrpcclient"
 	"github.com/btcsuite/btcutil"
 )
 
@@ -33,33 +31,7 @@ type Miner struct {
 
 // NewMiner starts a cpu-mining enabled btcd instane and returns an rpc client
 // to control it.
-func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
-	height chan<- int32, txpool chan<- struct{}) (*Miner, error) {
-
-	ntfnHandlers := &rpc.NotificationHandlers{
-		// When a block higher than stopBlock connects to the chain,
-		// send a signal to stop actors. This is used so main can break from
-		// select and call actor.Stop to stop actors.
-		OnBlockConnected: func(hash *wire.ShaHash, h int32) {
-			if h >= int32(*startBlock)-1 {
-				if height != nil {
-					height <- h
-				}
-			} else {
-				fmt.Printf("\r%d/%d", h, *startBlock)
-			}
-		},
-		// Send a signal that a tx has been accepted into the mempool. Based on
-		// the tx curve, the receiver will need to wait until required no of tx
-		// are filled up in the mempool
-		OnTxAccepted: func(hash *wire.ShaHash, amount btcutil.Amount) {
-			if txpool != nil {
-				// this will not be blocked because we're creating only
-				// required no of tx and receiving all of them
-				txpool <- struct{}{}
-			}
-		},
-	}
+func NewMiner(miningAddrs []btcutil.Address) (*Miner, error) {
 
 	log.Println("Starting miner on simnet...")
 	args, err := newBtcdArgs("miner")
@@ -83,11 +55,7 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 		}
 	}
 
-	logFile, err := getLogFile(args.prefix)
-	if err != nil {
-		log.Printf("Cannot get log file, logging disabled: %v", err)
-	}
-	node, err := NewNodeFromArgs(args, ntfnHandlers, logFile)
+	node, err := NewNodeFromArgs(args, nil, nil)
 
 	miner := &Miner{
 		Node: node,
@@ -113,7 +81,7 @@ func NewMiner(miningAddrs []btcutil.Address, exit chan struct{},
 		return miner, err
 	}
 
-	log.Printf("%s: Generating %v blocks...", miner, *startBlock)
+	log.Printf("%s: Generating blocks...", miner)
 	return miner, nil
 }
 

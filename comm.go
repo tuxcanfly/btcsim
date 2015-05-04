@@ -20,9 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"math/rand"
-	"os"
 	"sync"
 	"time"
 
@@ -57,10 +55,9 @@ type Communication struct {
 	timeReceived  chan time.Time
 	blockTxCount  chan int
 	exit          chan struct{}
-	errChan       chan struct{}
+	errs          chan error
 	height        chan int32
 	split         chan int
-	txpool        chan struct{}
 	coinbaseQueue chan *btcutil.Tx
 	blockQueue    *blockQueue
 }
@@ -75,10 +72,9 @@ func NewCommunication() *Communication {
 		blockTxCount:  make(chan int, *numActors),
 		height:        make(chan int32),
 		split:         make(chan int),
-		txpool:        make(chan struct{}),
 		coinbaseQueue: make(chan *btcutil.Tx, blockchain.CoinbaseMaturity),
 		exit:          make(chan struct{}),
-		errChan:       make(chan struct{}, *numActors),
+		errs:          make(chan error, *numActors),
 		blockQueue: &blockQueue{
 			enqueue:   make(chan *Block),
 			dequeue:   make(chan *Block),
@@ -89,68 +85,10 @@ func NewCommunication() *Communication {
 
 // Start handles the main part of a simulation by starting
 // all the necessary goroutines.
-func (com *Communication) Start(actors []*Actor, node *Node, txCurve map[int32]*Row) (tpsChan chan float64, tpbChan chan int) {
-	tpsChan = make(chan float64, 1)
-	tpbChan = make(chan int, 1)
-
-	// Start actors
-	for _, a := range actors {
-		com.wg.Add(1)
-		go func(a *Actor, com *Communication) {
-			defer com.wg.Done()
-			if err := a.Start(os.Stderr, os.Stdout, com); err != nil {
-				log.Printf("%s: Cannot start actor: %v", a, err)
-				a.Shutdown()
-				node.Shutdown()
-			}
-		}(a, com)
-	}
-
-	// Start a goroutine to check if all actors have failed
-	com.wg.Add(1)
-	go com.failedActors()
-
-	miningAddrs := make([]btcutil.Address, *numActors)
-	for i, a := range actors {
-		select {
-		case miningAddrs[i] = <-a.miningAddr:
-		case <-a.quit:
-			// This actor has quit
-			select {
-			case <-com.exit:
-				close(tpsChan)
-				close(tpbChan)
-				return
-			default:
-			}
-		}
-	}
-
-	// Start a miner process.
-	miner, err := NewMiner(miningAddrs, com.exit, com.height, com.txpool)
-	if err != nil {
-		close(com.exit)
-		close(tpsChan)
-		close(tpbChan)
-		com.wg.Add(1)
-		go com.Shutdown(miner, actors, node)
-		return
-	}
-
-	// Add mining node listen interface as a node
-	node.client.AddNode("localhost:18550", rpc.ANAdd)
-
-	// Start a goroutine to estimate tps
-	com.wg.Add(1)
-	go com.estimateTps(tpsChan, txCurve)
-
-	// Start a goroutine to find max tpb
-	com.wg.Add(1)
-	go com.estimateTpb(tpbChan)
-
+func (com *Communication) Start(miner *Miner, actors []*Actor, node *Node) {
 	// Start a goroutine to coordinate transactions
 	com.wg.Add(1)
-	go com.Communicate(txCurve, miner, actors)
+	go com.Communicate(miner, actors)
 
 	com.wg.Add(1)
 	go com.queueBlocks()
@@ -274,32 +212,22 @@ func (com *Communication) poolUtxos(client *rpc.Client, actors []*Actor) {
 					}
 				}
 			}
-			// allow Communicate to sync with the processed block
-			if b.height == int32(*startBlock)-1 {
-				select {
-				case com.blockQueue.processed <- b:
-				case <-com.exit:
-					return
-				}
+			var txCount, utxoCount int
+			for _, a := range actors {
+				utxoCount += len(a.utxoQueue.utxos)
 			}
-			if b.height >= int32(*startBlock) {
-				var txCount, utxoCount int
-				for _, a := range actors {
-					utxoCount += len(a.utxoQueue.utxos)
-				}
-				txCount = len(block.Transactions())
-				log.Printf("Block %s (height %d) attached with %d transactions", b.hash, b.height, txCount)
-				log.Printf("%d transaction outputs available to spend", utxoCount)
-				select {
-				case com.blockQueue.processed <- b:
-				case <-com.exit:
-					return
-				}
-				select {
-				case com.blockTxCount <- txCount:
-				case <-com.exit:
-					return
-				}
+			txCount = len(block.Transactions())
+			log.Printf("Block %s (height %d) attached with %d transactions", b.hash, b.height, txCount)
+			log.Printf("%d transaction outputs available to spend", utxoCount)
+			select {
+			case com.blockQueue.processed <- b:
+			case <-com.exit:
+				return
+			}
+			select {
+			case com.blockTxCount <- txCount:
+			case <-com.exit:
+				return
 			}
 		case <-com.exit:
 			return
@@ -345,244 +273,45 @@ func (com *Communication) getUtxo(tx *btcutil.Tx,
 	return &unspent
 }
 
-// failedActors checks for actors that aborted the simulation
-func (com *Communication) failedActors() {
-	defer com.wg.Done()
-
-	var failedActors int
-
-	for {
-		select {
-		case <-com.errChan:
-			failedActors++
-
-			// All actors have failed
-			if failedActors == *numActors {
-				close(com.exit)
-				return
-			}
-		case <-com.exit:
-			return
-		}
-	}
-}
-
-// estimateTps estimates the average transactions per second of
-// the simulation.
-func (com *Communication) estimateTps(tpsChan chan<- float64, txCurve map[int32]*Row) {
-	defer com.wg.Done()
-
-	var first, last time.Time
-	var diff, curveDiff time.Duration
-	var txnCount, curveCount, block int
-	firstTx := true
-
-	for {
-		select {
-		case last = <-com.timeReceived:
-			if firstTx {
-				first = last
-				firstTx = false
-			}
-			txnCount++
-			diff = last.Sub(first)
-
-			curveCount++
-			if c, ok := txCurve[int32(block)]; ok && curveCount == c.txCount {
-				// A block has been mined; reset necessary variables
-				curveCount = 0
-				firstTx = true
-				curveDiff += diff
-				diff = curveDiff
-				// Use next block's desired transaction count
-				block++
-			}
-		case <-com.exit:
-			tpsChan <- float64(txnCount) / diff.Seconds()
-			return
-		}
-	}
-}
-
-// estimateTpb sends the maximum transactions over the returned chan
-func (com *Communication) estimateTpb(tpbChan chan<- int) {
-	defer com.wg.Done()
-
-	var maxTpb int
-
-	for {
-		select {
-		case last := <-com.blockTxCount:
-			if last > maxTpb {
-				maxTpb = last
-			}
-		case <-com.exit:
-			tpbChan <- maxTpb
-			return
-		}
-	}
-}
-
 // Communicate generates tx and controls the mining according
 // to the input block height vs tx count curve
-func (com *Communication) Communicate(txCurve map[int32]*Row, miner *Miner, actors []*Actor) {
+func (com *Communication) Communicate(miner *Miner, actors []*Actor) {
 	defer com.wg.Done()
 
-	go func() {
-		if err := miner.Generate(uint32(*startBlock) - 1); err != nil {
-			close(com.exit)
-		}
-	}()
+	// wait until this block is processed
+	select {
+	case <-com.blockQueue.processed:
+	case <-com.exit:
+		return
+	}
 
-	for {
+	var wg sync.WaitGroup
+	// count the number of utxos available in total
+	var utxoCount int
+	for _, a := range actors {
+		utxoCount += len(a.utxoQueue.utxos)
+	}
+
+	reqTxCount := utxoCount
+
+	log.Printf("Generating %v transactions ...", reqTxCount)
+	for i := 0; i < reqTxCount; i++ {
+		fmt.Printf("\r%d/%d", i+1, reqTxCount)
+		a := actors[rand.Int()%len(actors)]
+		addr := a.ownedAddresses[rand.Int()%len(a.ownedAddresses)]
 		select {
-		case h := <-com.height:
-
-			// stop simulation if we're at the last block
-			if h > int32(*stopBlock) {
-				close(com.exit)
-				return
-			}
-
-			// wait until this block is processed
-			select {
-			case <-com.blockQueue.processed:
-			case <-com.exit:
-				return
-			}
-
-			var wg sync.WaitGroup
-			// count the number of utxos available in total
-			var utxoCount int
-			for _, a := range actors {
-				utxoCount += len(a.utxoQueue.utxos)
-			}
-
-			// the required transactions are divided into two groups because we need some of them to
-			// contribute to the utxo count required for the next block and the rest to contribute to
-			// the tx count
-			//
-			// it is possible to keep dividing the same utxo until it's broken into the required
-			// number of pieces but we want to stay close to the real world scenario and maximize
-			// the number of utxos used
-			//
-			// E.g: Assume the following CSV
-			//
-			// block,utxos,tx
-			// 20000,40000,20000
-			// 20001,50000,25000
-			//
-			// at block 19999, we need to ensure that next block has 40K utxos
-			// we have 19999 - blockchain.CoinbaseMaturity = 19899 utxos
-			// we need to create 40K-19899 = 20101 utxos so in this case, so
-			// we create 20101 tx which give 1 net utxo output
-			//
-			// at block 20000, we need to ensure that next block has 50K utxos
-			// we already have 40K by the previous iteration, so we need 50-40 = 10K utxos
-			// we also need to generate 20K tx before the next block, so
-			// create 10000 tx which generate 1 net utxo plus 10000 tx without any net utxo
-			//
-			// since we cannot generate more tx than the no of available utxos, the no of tx
-			// that can be generated at any iteration is limited by the utxos available
-
-			// in case the next row doesn't exist, we initialize the required no of utxos to zero
-			// so we keep the utxoCount same as current count
-			next, ok := txCurve[h+2]
-			if !ok {
-				next = &Row{}
-				next.utxoCount = utxoCount
-			}
-
-			// reqUtxoCount is the number of utxos required
-			reqUtxoCount := 0
-			if next.utxoCount > utxoCount {
-				reqUtxoCount = next.utxoCount - utxoCount
-			}
-
-			// in case this row doesn't exist, we initialize the required no of tx to reqUtxoCount
-			// i.e one tx per utxo required
-			row, ok := txCurve[h+1]
-			if !ok {
-				row = &Row{}
-				row.txCount = reqUtxoCount
-			}
-
-			// reqTxCount is the number of tx that will generate reqUtxoCount
-			// no of utxos
-			reqTxCount := row.txCount
-			if reqTxCount > utxoCount {
-				log.Printf("Warning: capping no of transactions at %v based on no of available utxos", utxoCount)
-				// cap the total no of tx at the no of available utxos
-				reqTxCount = utxoCount
-			}
-
-			var multiplier, totalUtxos, totalTx int
-			// skip if we already have more than the no of utxos required
-			if reqUtxoCount > 0 {
-				// e.g: if we need 18K utxos in 12K tx
-				// multiplier = [18000/12000] = [1.5] = 2
-				// totalUtxos = 18000/2 = 9000
-				// totalTx = 120000 - 9000 = 3000
-				multiplier = int(math.Ceil(float64(reqUtxoCount) / float64(reqTxCount)))
-				if multiplier > *maxSplit {
-					// cap maximum splits at maxSplit
-					multiplier = *maxSplit
-				}
-				totalUtxos = reqUtxoCount / multiplier
-			}
-
-			// if we're not already covered by the utxo transactions, generate additional tx
-			if reqTxCount > totalUtxos {
-				totalTx = reqTxCount - totalUtxos
-			}
-
-			if reqTxCount > 0 {
-				log.Printf("Generating %v transactions ...", reqTxCount)
-			}
-			if totalTx > 0 {
-				for i := 0; i < totalTx; i++ {
-					fmt.Printf("\r%d/%d", i+1, reqTxCount)
-					a := actors[rand.Int()%len(actors)]
-					addr := a.ownedAddresses[rand.Int()%len(a.ownedAddresses)]
-					select {
-					case com.downstream <- addr:
-						// For every address sent downstream (one transaction about to happen),
-						// spawn a goroutine to listen for an accepted transaction in the mempool
-						wg.Add(1)
-						go com.txPoolRecv(&wg)
-					case <-com.exit:
-						return
-					}
-				}
-			}
-
-			if totalUtxos > 0 {
-				for i := 0; i < totalUtxos; i++ {
-					fmt.Printf("\r%d/%d", i+totalTx+1, reqTxCount)
-					select {
-					case com.split <- multiplier:
-						// For every address sent downstream (one transaction about to happen),
-						// spawn a goroutine to listen for an accepted transaction in the mempool
-						wg.Add(1)
-						go com.txPoolRecv(&wg)
-					case <-com.exit:
-						return
-					}
-				}
-			}
-
-			fmt.Printf("\n")
-			log.Printf("Waiting for miner...")
-			wg.Wait()
-			// mine the above tx in the next block
-			go func() {
-				if err := miner.Generate(1); err != nil {
-					close(com.exit)
-				}
-			}()
+		case com.downstream <- addr:
 		case <-com.exit:
 			return
 		}
+	}
+
+	fmt.Printf("\n")
+	log.Printf("Waiting for miner...")
+	wg.Wait()
+	// mine the above tx in the next block
+	if err := miner.Generate(1); err != nil {
+		close(com.exit)
 	}
 }
 
@@ -607,15 +336,4 @@ func (com *Communication) Shutdown(miner *Miner, actors []*Actor, node *Node) {
 // has returned.
 func (com *Communication) WaitForShutdown() {
 	com.wg.Wait()
-}
-
-// txPoolRecv listens for transactions accepted in the miner mempool
-// or errors happened during the creation or send of a transaction.
-func (com *Communication) txPoolRecv(wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	select {
-	case <-com.txpool:
-	case <-com.exit:
-	}
 }

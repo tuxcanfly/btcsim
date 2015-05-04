@@ -77,11 +77,7 @@ func NewActor(node *Node, port uint16) (*Actor, error) {
 		return nil, err
 	}
 
-	logFile, err := getLogFile(args.prefix)
-	if err != nil {
-		log.Printf("Cannot get log file, logging disabled: %v", err)
-	}
-	btcwallet, err := NewNodeFromArgs(args, nil, logFile)
+	btcwallet, err := NewNodeFromArgs(args, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +113,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 
 	if err := a.Node.Start(); err != nil {
 		a.Shutdown()
-		com.errChan <- struct{}{}
+		com.errs <- err
 		return err
 	}
 
@@ -130,7 +126,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 
 	if err := a.Connect(); err != nil {
 		a.Shutdown()
-		com.errChan <- struct{}{}
+		com.errs <- err
 		return err
 	}
 
@@ -153,7 +149,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 		addr, err := a.client.GetNewAddress("")
 		if err != nil {
 			log.Printf("%s: Cannot create address #%d", a, i+1)
-			com.errChan <- struct{}{}
+			com.errs <- err
 			return err
 		}
 		a.ownedAddresses[i] = addr
@@ -161,8 +157,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 	fmt.Printf("\n")
 
 	if err := a.client.WalletPassphrase(a.walletPassphrase, timeoutSecs); err != nil {
-		log.Printf("%s: Cannot unlock wallet: %v", a, err)
-		com.errChan <- struct{}{}
+		com.errs <- err
 		return err
 	}
 
@@ -177,11 +172,11 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 
 	// Start a goroutine to simulate transactions.
 	a.wg.Add(1)
-	go a.simulateTx(com.downstream, com.txpool)
+	go a.simulateTx(com.downstream)
 
 	// Start a goroutine to split utxos
 	a.wg.Add(1)
-	go a.splitUtxos(com.split, com.txpool)
+	go a.splitUtxos(com.split)
 
 	return nil
 }
@@ -190,7 +185,7 @@ func (a *Actor) Start(stderr, stdout io.Writer, com *Communication) error {
 //
 // It receives a random address downstream, dequeues a utxo, sends a raw
 // transaction to the address using the utxo as input
-func (a *Actor) simulateTx(downstream <-chan btcutil.Address, txpool chan<- struct{}) {
+func (a *Actor) simulateTx(downstream <-chan btcutil.Address) {
 	defer a.wg.Done()
 
 	for {
@@ -214,11 +209,6 @@ func (a *Actor) simulateTx(downstream <-chan btcutil.Address, txpool chan<- stru
 				err := a.sendRawTransaction(inputs, amounts)
 				if err != nil {
 					log.Printf("%s: Error sending raw transaction: %v", a, err)
-					select {
-					case txpool <- struct{}{}:
-					case <-a.quit:
-						return
-					}
 					continue
 				}
 
@@ -237,7 +227,7 @@ func (a *Actor) simulateTx(downstream <-chan btcutil.Address, txpool chan<- stru
 // It receives a 'split' which is int that indicates the number of resultant utxos
 // the tx is sent to addresses from the same actor since we're only interested in
 // building up the utxo set
-func (a *Actor) splitUtxos(split <-chan int, txpool chan<- struct{}) {
+func (a *Actor) splitUtxos(split <-chan int) {
 	defer a.wg.Done()
 
 	for {
@@ -291,11 +281,6 @@ func (a *Actor) splitUtxos(split <-chan int, txpool chan<- struct{}) {
 				err := a.sendRawTransaction(inputs, amounts)
 				if err != nil {
 					log.Printf("%s: Error sending raw transaction: %v", a, err)
-					select {
-					case txpool <- struct{}{}:
-					case <-a.quit:
-						return
-					}
 					continue
 				}
 
